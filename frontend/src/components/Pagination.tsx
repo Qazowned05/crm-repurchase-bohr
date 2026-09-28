@@ -23,14 +23,11 @@ export function Pagination<T>({ data, onPageChange }: { data: Paged<T>; onPageCh
 
   return (
     <nav className="pagination" aria-label="Paginación">
-      <button className="pagination-arrow" disabled={data.page === 1} onClick={() => onPageChange(1)} aria-label="Primera página">
-        &laquo;
-      </button>
       <button className="pagination-arrow" disabled={data.page === 1} onClick={() => onPageChange(Math.max(1, data.page - 10))} aria-label="Retroceder diez páginas">
-        &lsaquo;10
+        &lt;&lt;
       </button>
       <button className="pagination-arrow" disabled={data.page === 1} onClick={() => onPageChange(data.page - 1)} aria-label="Página anterior">
-        &lsaquo;
+        &lt;
       </button>
       {visiblePages.map((page, index) => (
         <span key={page} className="pagination-page-group">
@@ -41,13 +38,10 @@ export function Pagination<T>({ data, onPageChange }: { data: Paged<T>; onPageCh
         </span>
       ))}
       <button className="pagination-arrow" disabled={data.page >= data.pages} onClick={() => onPageChange(data.page + 1)} aria-label="Página siguiente">
-        &rsaquo;
+        &gt;
       </button>
       <button className="pagination-arrow" disabled={data.page >= data.pages} onClick={() => onPageChange(Math.min(data.pages, data.page + 10))} aria-label="Avanzar diez páginas">
-        10&rsaquo;
-      </button>
-      <button className="pagination-arrow" disabled={data.page >= data.pages} onClick={() => onPageChange(data.pages)} aria-label="Última página">
-        &raquo;
+        &gt;&gt;
       </button>
     </nav>
   );
