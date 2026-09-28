@@ -75,3 +75,23 @@ def test_recovery_queue_filters_latest_descendant_typification_and_days_overdue(
     assert queued_alert["latest_contact_typification"] == child["code"]
     assert queued_alert["latest_contact_date"] is not None
     assert client.get(f"/api/v1/supervision/recovery-queue?typification_id={parent['id']}&min_days_overdue=1", headers=supervisor_auth).json() == []
+
+
+def test_child_typification_id_closes_alert_and_alert_response_is_actionable(client: TestClient, db: Session) -> None:
+    sale, product, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="close")
+    parent = client.post("/api/v1/configuration/contact-typifications", headers=supervisor_auth, json={"code": "FINAL", "name": "Final"}).json()
+    child = client.post("/api/v1/configuration/contact-typifications", headers=supervisor_auth, json={
+        "code": "FINAL_DONE", "name": "Done", "parent_id": parent["id"], "requires_close": True,
+    }).json()
+    inbox = client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
+    assert inbox.status_code == 200
+    alert = inbox.json()[0]
+    assert alert["customer_first_names"] == "Alicia"
+    assert alert["product_id"] == product["id"]
+    assert alert["original_sale_date"] == sale["sale_date"]
+    assert alert["seller_advisor_id"] == advisor.id
+    closed = client.post(f"/api/v1/alerts/{alert['id']}/attempts", headers=auth(client, advisor.email), json={
+        "channel": "LLAMADA", "result": "ignored", "typification_id": child["id"],
+    })
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "CERRADO_POR_TIPIFICACION"

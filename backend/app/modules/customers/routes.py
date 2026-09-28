@@ -10,6 +10,7 @@ from app.modules.customers.models import Customer
 from app.modules.customers.schemas import CustomerCreate, CustomerResponse, CustomerSupervisorUpdate
 from app.modules.sales.models import Sale, SaleItem
 from app.modules.sales.schemas import SaleResponse
+from app.modules.sales.routes import sale_response
 
 router = APIRouter(prefix="/api/v1/customers", tags=["customers"])
 
@@ -63,13 +64,7 @@ def customer_sales_history(
     customer = get_customer_or_404(customer_id, db)
     assert_customer_access(customer, current_user)
     sales = db.scalars(select(Sale).where(Sale.customer_id == customer.id).order_by(Sale.sale_date.desc(), Sale.created_at.desc()))
-    return [
-        {
-            **{column.name: getattr(sale, column.name) for column in Sale.__table__.columns},
-            "items": list(db.scalars(select(SaleItem).where(SaleItem.sale_id == sale.id).order_by(SaleItem.created_at))),
-        }
-        for sale in sales
-    ]
+    return [sale_response(sale, db) for sale in sales]
 
 
 @router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)

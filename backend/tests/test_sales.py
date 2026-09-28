@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.modules.audit.models import AuditLog
 from app.modules.auth.models import User
-from app.modules.sales.models import SaleDuplicateReview, SaleItem
+from app.modules.alerts.models import Alert, AlertContactAttempt
+from app.modules.sales.models import Sale, SaleDuplicateReview, SaleItem
 
 
 def user(db: Session, email: str, role: str) -> User:
@@ -110,3 +111,39 @@ def test_supervisor_can_register_one_replacement_for_annulled_sale(client: TestC
     assert replacement.json()["replaces_sale_id"] == original["id"]
     assert replacement.json()["items"][0]["purchase_type"] == "COMPRA"
     assert client.post("/api/v1/sales", headers=supervisor_auth, json=replacement_payload).status_code == 409
+
+
+def test_supervisor_edits_and_hard_deletes_sale_with_alert_dependents(client: TestClient, db: Session) -> None:
+    advisor, customer, product, supervisor_auth = customer_and_product(client, db)
+    advisor_auth = headers(client, advisor.email)
+    sale = client.post("/api/v1/sales", headers=advisor_auth, json={
+        "customer_id": customer["id"], "sale_date": "2026-01-10", "acquisition_channel": "TV",
+        "notes": "Initial note", "items": [{"product_id": product["id"], "quantity": 1}],
+    }).json()
+    listed = client.get("/api/v1/sales", headers=supervisor_auth).json()[0]
+    assert listed["customer_first_names"] == "Ana"
+    assert listed["advisor_full_name"] == advisor.full_name
+    assert listed["items"][0]["product_name"] == "Colageno"
+    assert client.patch(f"/api/v1/sales/{sale['id']}", headers=advisor_auth, json={"notes": "Denied"}).status_code == 403
+    edited = client.patch(f"/api/v1/sales/{sale['id']}", headers=supervisor_auth, json={
+        "sale_date": "2026-01-12", "notes": "Corrected", "items": [{"product_id": product["id"], "quantity": 2}],
+    })
+    assert edited.status_code == 200
+    assert edited.json()["items"][0]["expected_repurchase_date"] == "2026-02-11"
+    alert = Alert(sale_item_id=edited.json()["items"][0]["id"], alert_date=date(2026, 2, 11), expected_repurchase_date=date(2026, 2, 11))
+    db.add(alert)
+    db.flush()
+    alert_id = alert.id
+    db.add(AlertContactAttempt(alert_id=alert.id, advisor_id=advisor.id, channel="LLAMADA", result="OTRO"))
+    linked_sale = Sale(customer_id=customer["id"], advisor_id=advisor.id, sale_date=date(2026, 3, 1), status="RECHAZADA_DUPLICADO", source_alert_id=alert_id)
+    db.add(linked_sale)
+    db.commit()
+    assert client.delete(f"/api/v1/sales/{sale['id']}", headers=advisor_auth).status_code == 403
+    assert client.delete(f"/api/v1/sales/{sale['id']}", headers=supervisor_auth).status_code == 204
+    assert db.get(Sale, sale["id"]) is None
+    assert db.query(SaleItem).filter_by(sale_id=sale["id"]).count() == 0
+    assert db.query(Alert).filter_by(id=alert_id).count() == 0
+    assert db.query(AlertContactAttempt).filter_by(alert_id=alert_id).count() == 0
+    assert db.get(Sale, linked_sale.id).source_alert_id is None
+    audit = db.query(AuditLog).filter_by(entity_type="sale", entity_id=sale["id"], action="HARD_DELETED").one()
+    assert audit.before_data["notes"] == "Corrected"
