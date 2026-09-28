@@ -98,9 +98,3 @@ export type AdvisorSalesMetrics = {
   repurchase_sales: number;
   repurchase_items: number;
 };
-export type AlertGeneration = {
-  run_date: string;
-  created: number;
-  pending: number;
-  expired: number;
-};

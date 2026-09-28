@@ -5,7 +5,6 @@ import { api } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import type {
   AdvisorSalesMetrics,
-  AlertGeneration,
   Customer,
   Product,
   Sale,
@@ -36,8 +35,6 @@ export function Sales({ user }: { user: User }) {
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
   const [channel, setChannel] = useState("TV");
   const [error, setError] = useState("");
-  const [generationMessage, setGenerationMessage] = useState("");
-  const [generating, setGenerating] = useState(false);
   const advisor = user.role === "ASESOR";
   const load = async () => {
     const [customerRows, productRows, saleRows, advisorMetrics] = await Promise.all([
@@ -96,20 +93,6 @@ export function Sales({ user }: { user: User }) {
       setError(reason instanceof Error ? reason.message : "No fue posible registrar la venta.");
     }
   };
-  const generateAlerts = async () => {
-    setGenerating(true);
-    setGenerationMessage("");
-    try {
-      const result = await api<AlertGeneration>("/alerts/generate", { method: "POST" });
-      setGenerationMessage(`Alertas generadas para ${result.run_date}: ${result.created} nuevas.`);
-    } catch (reason) {
-      setGenerationMessage(
-        reason instanceof Error ? reason.message : "No fue posible generar alertas.",
-      );
-    } finally {
-      setGenerating(false);
-    }
-  };
   const customerName = (customerId: string) => {
     const customer = customers.find((row) => row.id === customerId);
     return customer ? `${customer.last_names} ${customer.first_names}` : customerId;
@@ -158,38 +141,6 @@ export function Sales({ user }: { user: User }) {
           />
         </section>
       )}
-      {!advisor && (
-        <section className="panel sales-operations">
-          <div className="panel-heading">
-            <div>
-              <h2>Generación de alertas</h2>
-              <p>
-                Genera las alertas pendientes hoy. La generación programada se habilitará en una
-                próxima operación.
-              </p>
-            </div>
-            <button onClick={generateAlerts} disabled={generating}>
-              {generating ? "Generando..." : "Generar alertas"}
-            </button>
-          </div>
-          {generationMessage && (
-            <p
-              className={
-                generationMessage.includes("No fue posible") ? "form-error" : "success-message"
-              }
-            >
-              {generationMessage}
-            </p>
-          )}
-        </section>
-      )}
-      <section className="panel">
-        <h2>{advisor ? "Tu espacio de ventas" : "Registro de ventas"}</h2>
-        <p>
-          Selecciona un cliente existente o créalo durante el registro. Solo se muestran productos
-          activos.
-        </p>
-      </section>
       <section className="panel sales-history">
         <div className="panel-heading">
           <div>

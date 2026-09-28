@@ -445,9 +445,6 @@ form footer,
   padding: 9px 11px;
   font-size: 13px;
 }
-.sales-operations .panel-heading {
-  align-items: center;
-}
 .sales-history .header-metric {
   flex: 0 0 auto;
 }

@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
-from app.dependencies import get_current_user, require_roles
+from app.dependencies import get_current_user
 from app.modules.alerts.models import Alert, AlertContactAttempt
-from app.modules.alerts.schemas import AlertResponse, ContactAttemptCreate, ContactAttemptResponse, GenerationResponse
+from app.modules.alerts.schemas import AlertResponse, ContactAttemptCreate, ContactAttemptResponse
 from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, run_alert_generation
 from app.modules.alerts.service import advisor_visible_alerts_query
 from app.modules.auth.models import User
@@ -27,13 +27,6 @@ def alert_or_404(alert_id: str, db: Session) -> Alert:
 def assert_alert_access(alert: Alert, user: User) -> None:
     if user.role == "ASESOR" and alert.assigned_advisor_id != user.id:
         raise HTTPException(status_code=403, detail="You can only manage your assigned alerts")
-
-
-@router.post("/generate", response_model=GenerationResponse)
-def generate_alerts(run_date: date | None = None, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> dict:
-    effective_date = run_date or date.today()
-    result = run_alert_generation(effective_date, db, current_user.id)
-    return {"run_date": effective_date, **result}
 
 
 @router.get("/inbox", response_model=list[AlertResponse])

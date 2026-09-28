@@ -36,10 +36,3 @@ class ContactAttemptResponse(BaseModel):
     next_action_date: date | None
 
     model_config = {"from_attributes": True}
-
-
-class GenerationResponse(BaseModel):
-    run_date: date
-    created: int
-    pending: int
-    expired: int
