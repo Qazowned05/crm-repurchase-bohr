@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
+from app.core.pagination import paginate_items
 from app.dependencies import require_roles
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.alerts.schemas import AlertResponse
@@ -21,6 +22,7 @@ from app.modules.supervision.models import AlertAssignmentHistory, CustomerAssig
 from app.modules.supervision.schemas import (
     AlertAssignmentHistoryResponse,
     AssignmentCreate,
+    BulkAssignmentCreate,
     CustomerAssignmentHistoryResponse,
     RecoveryCustomerResponse,
 )
@@ -94,25 +96,31 @@ def transfer_portfolio(
     return {"customer_id": customer.id, "assigned_advisor_id": customer.responsible_advisor_id, "transferred_alerts": len(alerts)}
 
 
-@router.get("/customers/{customer_id}/assignment-history", response_model=list[CustomerAssignmentHistoryResponse])
-def customer_assignment_history(customer_id: str, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[CustomerAssignmentHistory]:
+@router.get("/customers/{customer_id}/assignment-history", response_model=None)
+def customer_assignment_history(customer_id: str, page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[CustomerAssignmentHistory] | dict:
     customer_or_404(customer_id, db)
-    return list(db.scalars(select(CustomerAssignmentHistory).where(CustomerAssignmentHistory.customer_id == customer_id).order_by(CustomerAssignmentHistory.created_at)))
+    return paginate_items(list(db.scalars(select(CustomerAssignmentHistory).where(CustomerAssignmentHistory.customer_id == customer_id).order_by(CustomerAssignmentHistory.created_at))), page, page_size)
 
 
-@router.get("/recovery-alerts", response_model=list[AlertResponse])
-def recovery_alerts(current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[dict]:
-    return [alert_response(alert, db) for alert in db.scalars(recovery_alerts_query(db).order_by(Alert.alert_date))]
+@router.get("/recovery-alerts")
+def recovery_alerts(
+    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
+) -> list[dict] | dict:
+    rows = [alert_response(alert, db) for alert in db.scalars(recovery_alerts_query(db).order_by(Alert.alert_date))]
+    return paginate_items(rows, page, page_size)
 
 
-@router.get("/recovery-queue", response_model=list[RecoveryCustomerResponse])
+@router.get("/recovery-queue")
 def recovery_queue(
     typification_id: str | None = None,
     min_days_overdue: int | None = Query(default=None, ge=0),
     max_days_overdue: int | None = Query(default=None, ge=0),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")),
     db: Session = Depends(get_db),
-) -> list[dict]:
+) -> list[dict] | dict:
     if min_days_overdue is not None and max_days_overdue is not None and min_days_overdue > max_days_overdue:
         raise HTTPException(status_code=422, detail="min_days_overdue cannot exceed max_days_overdue")
     latest_result = (
@@ -156,7 +164,7 @@ def recovery_queue(
             "sale_id": sale.id, "sale_date": sale.sale_date, "product_id": product.id,
             "product_code": product.code, "product_name": product.name,
         })
-    return list(grouped.values())
+    return paginate_items(list(grouped.values()), page, page_size)
 
 
 @router.post("/alerts/{alert_id}/assign", response_model=AlertResponse)
@@ -175,7 +183,32 @@ def assign_recovery_alert(alert_id: str, payload: AssignmentCreate, current_user
     return alert_response(alert, db)
 
 
-@router.get("/alerts/{alert_id}/assignment-history", response_model=list[AlertAssignmentHistoryResponse])
-def alert_assignment_history(alert_id: str, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[AlertAssignmentHistory]:
+@router.post("/alerts/bulk-assign")
+def bulk_assign_recovery_alerts(
+    payload: BulkAssignmentCreate,
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
+) -> dict:
+    if payload.assigned_advisor_id is None:
+        raise HTTPException(status_code=422, detail="An active advisor is required")
+    if len(set(payload.alert_ids)) != len(payload.alert_ids):
+        raise HTTPException(status_code=422, detail="alert_ids must not contain duplicates")
+    validate_responsible(payload.assigned_advisor_id, db)
+    alerts = list(db.scalars(select(Alert).where(Alert.id.in_(payload.alert_ids)).with_for_update()))
+    if len(alerts) != len(payload.alert_ids):
+        raise HTTPException(status_code=404, detail="One or more alerts were not found")
+    recoverable_ids = set(db.scalars(recovery_alerts_query(db).where(Alert.id.in_(payload.alert_ids)).with_only_columns(Alert.id)))
+    if recoverable_ids != set(payload.alert_ids) or any(alert.status not in {"PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA", "VENCIDO_NO_GESTIONADO"} for alert in alerts):
+        raise HTTPException(status_code=409, detail="Only alerts currently in the recovery scope can be assigned")
+    reason = payload.reason.strip()
+    for alert in alerts:
+        record_alert_assignment(alert, payload.assigned_advisor_id, reason, current_user.id, db)
+        if alert.status == "VENCIDO_NO_GESTIONADO":
+            alert.status, alert.closed_at = "PENDIENTE", None
+    db.commit()
+    return {"assigned_advisor_id": payload.assigned_advisor_id, "assigned_alert_ids": payload.alert_ids, "count": len(alerts)}
+
+
+@router.get("/alerts/{alert_id}/assignment-history", response_model=None)
+def alert_assignment_history(alert_id: str, page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[AlertAssignmentHistory] | dict:
     alert_or_404(alert_id, db)
-    return list(db.scalars(select(AlertAssignmentHistory).where(AlertAssignmentHistory.alert_id == alert_id).order_by(AlertAssignmentHistory.created_at)))
+    return paginate_items(list(db.scalars(select(AlertAssignmentHistory).where(AlertAssignmentHistory.alert_id == alert_id).order_by(AlertAssignmentHistory.created_at))), page, page_size)

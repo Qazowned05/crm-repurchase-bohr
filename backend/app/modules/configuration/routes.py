@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import record_audit
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.pagination import paginate_items
 from app.dependencies import get_current_user, require_roles
 from app.modules.auth.models import User
 from app.modules.configuration.models import AlertOperationalSettings, ContactTypification
@@ -30,13 +31,13 @@ def operational_settings(db: Session) -> AlertOperationalSettings:
     return record
 
 
-@router.get("/contact-typifications", response_model=list[ContactTypificationResponse])
-def list_contact_typifications(current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[ContactTypification]:
-    return list(db.scalars(select(ContactTypification).order_by(ContactTypification.code)))
+@router.get("/contact-typifications", response_model=None)
+def list_contact_typifications(page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[ContactTypification] | dict:
+    return paginate_items(list(db.scalars(select(ContactTypification).order_by(ContactTypification.code))), page, page_size)
 
 
-@router.get("/contact-typifications/tree", response_model=list[ContactTypificationTreeResponse])
-def contact_typification_tree(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
+@router.get("/contact-typifications/tree")
+def contact_typification_tree(page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict] | dict:
     nodes = {
         record.id: {"id": record.id, "parent_id": record.parent_id, "code": record.code, "name": record.name,
                     "is_active": record.is_active, "requires_next_action": record.requires_next_action,
@@ -51,7 +52,7 @@ def contact_typification_tree(current_user: User = Depends(get_current_user), db
             roots.append(node)
         else:
             parent["children"].append(node)
-    return roots
+    return paginate_items(roots, page, page_size)
 
 
 def validate_parent(parent_id: str | None, record_id: str | None, db: Session) -> None:

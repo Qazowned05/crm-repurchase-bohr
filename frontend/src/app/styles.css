@@ -326,6 +326,19 @@ nav button.active {
 .table-wrap {
   overflow-x: auto;
 }
+
+.pagination {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.pagination span {
+  color: var(--muted);
+  margin-right: auto;
+}
 table {
   width: 100%;
   border-collapse: collapse;

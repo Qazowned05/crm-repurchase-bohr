@@ -18,6 +18,10 @@ class SalesReportResponse(BaseModel):
     start_date: date | None
     end_date: date | None
     rows: list[SalesReportRow]
+    page: int | None = None
+    page_size: int | None = None
+    total: int | None = None
+    pages: int | None = None
 
 
 class AlertsReportRow(BaseModel):
@@ -33,6 +37,10 @@ class AlertsReportResponse(BaseModel):
     start_date: date | None
     end_date: date | None
     rows: list[AlertsReportRow]
+    page: int | None = None
+    page_size: int | None = None
+    total: int | None = None
+    pages: int | None = None
 
 
 class MetricsResponse(BaseModel):
@@ -40,3 +48,6 @@ class MetricsResponse(BaseModel):
     contact_rate: float
     repurchase_rate: float
     average_days_between_purchases: float | None
+    repurchase_denominator: int
+    advisor_ranking: list[dict]
+    attention_typifications: list[dict]

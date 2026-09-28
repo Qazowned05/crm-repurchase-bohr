@@ -51,3 +51,42 @@ def test_reports_filter_invalid_alerts_and_export_csv(client: TestClient, db: Se
     metrics = client.get("/api/v1/reports/metrics", headers=supervisor_auth)
     assert metrics.json()["alerts_considered"] == 1
     assert client.get("/api/v1/reports/sales", headers=auth(client, "advisor-alertreport@example.com")).status_code == 403
+
+
+def test_recovery_pagination_and_bulk_assignment_are_audited(client: TestClient, db: Session) -> None:
+    first, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="bulkone")
+    second, _, _, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="bulktwo")
+    target = make_user(db, "bulk-target@example.com", "ASESOR")
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
+    for sale in (first, second):
+        assert client.post(
+            f"/api/v1/supervision/customers/{sale['customer_id']}/transfer", headers=supervisor_auth,
+            json={"assigned_advisor_id": None, "reason": "Queue for bulk assignment"},
+        ).status_code == 200
+    queue = client.get("/api/v1/supervision/recovery-queue?page=1&page_size=1", headers=supervisor_auth)
+    assert queue.status_code == 200
+    assert queue.json()["page"] == 1
+    assert queue.json()["page_size"] == 1
+    assert queue.json()["total"] == 2
+    assert queue.json()["pages"] == 2
+    alert_ids = [alert.id for alert in db.query(Alert).order_by(Alert.id)]
+    assigned = client.post("/api/v1/supervision/alerts/bulk-assign", headers=supervisor_auth, json={
+        "alert_ids": alert_ids, "assigned_advisor_id": target.id, "reason": "Campaign capacity",
+    })
+    assert assigned.status_code == 200
+    assert assigned.json()["count"] == 2
+    assert db.query(AlertAssignmentHistory).filter(AlertAssignmentHistory.assigned_advisor_id == target.id).count() == 2
+
+
+def test_metrics_group_attempts_at_root_typification(client: TestClient, db: Session) -> None:
+    _, _, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="metricroot")
+    parent = client.post("/api/v1/configuration/contact-typifications", headers=supervisor_auth, json={"code": "ROOT_METRIC", "name": "Root metric"}).json()
+    child = client.post("/api/v1/configuration/contact-typifications", headers=supervisor_auth, json={"code": "CHILD_METRIC", "name": "Child metric", "parent_id": parent["id"]}).json()
+    alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
+    assert client.post(f"/api/v1/alerts/{alert['id']}/attempts", headers=auth(client, advisor.email), json={
+        "channel": "LLAMADA", "result": child["code"], "typification_id": child["id"], "next_action_date": str(date.today()),
+    }).status_code == 200
+    metrics = client.get("/api/v1/reports/metrics", headers=supervisor_auth).json()
+    assert metrics["repurchase_denominator"] == 1
+    assert metrics["advisor_ranking"][0]["contact_attempts"] == 1
+    assert metrics["attention_typifications"] == [{"typification_id": parent["id"], "typification_code": "ROOT_METRIC", "typification_name": "Root metric", "attempts": 1}]

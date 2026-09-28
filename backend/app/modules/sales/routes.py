@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
+from app.core.pagination import paginate_items
 from app.dependencies import get_current_user, require_roles
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
@@ -175,11 +176,12 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
     return sale_response(sale, db)
 
 
-@router.get("", response_model=list[SaleResponse])
+@router.get("")
 def list_sales(
     customer_id: str | None = None, sale_date: date | None = None, sale_status: str | None = Query(default=None, alias="status"),
+    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
-) -> list[dict]:
+) -> list[dict] | dict:
     query = select(Sale).order_by(Sale.sale_date.desc(), Sale.created_at.desc())
     if current_user.role == "ASESOR":
         query = query.where(Sale.advisor_id == current_user.id)
@@ -189,7 +191,7 @@ def list_sales(
         query = query.where(Sale.sale_date == sale_date)
     if sale_status:
         query = query.where(Sale.status == sale_status)
-    return [sale_response(sale, db) for sale in db.scalars(query)]
+    return paginate_items([sale_response(sale, db) for sale in db.scalars(query)], page, page_size)
 
 
 @router.get("/me/metrics", response_model=AdvisorSalesMetricsResponse)

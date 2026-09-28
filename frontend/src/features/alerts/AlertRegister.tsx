@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Modal } from "../../components/Modal";
+import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { api } from "../../services/api";
-import type { ContactAttempt, ManagedAlert } from "../../services/types";
+import type { ContactAttempt, ManagedAlert, Paged } from "../../services/types";
 
 const closedStatuses = new Set([
   "RECOMPRA_LOGRADA",
@@ -102,13 +103,14 @@ function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => 
 }
 
 export function AlertRegister() {
-  const [items, setItems] = useState<ManagedAlert[]>([]);
+  const [data, setData] = useState<Paged<ManagedAlert>>({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 });
   const [selected, setSelected] = useState<ManagedAlert | null>(null);
   const [filters, setFilters] = useState({ date_from: "", date_to: "", state: "" });
   const [error, setError] = useState("");
-  const load = (active = filters) => {
-    const query = new URLSearchParams(Object.entries(active).filter(([, value]) => value !== ""));
-    return api<ManagedAlert[]>(`/alerts/register${query.size ? `?${query}` : ""}`).then(setItems);
+  const load = (page = data.page, active = filters) => {
+    const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+    Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
+    return api<Paged<ManagedAlert> | ManagedAlert[]>(`/alerts/register?${query}`).then((value) => setData(asPaged(value, page)));
   };
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar el registro de alertas."));
@@ -122,7 +124,7 @@ export function AlertRegister() {
           <p>Consulta alertas en seguimiento y alertas cerradas con su trazabilidad completa.</p>
         </div>
         <div className="header-metric">
-          <b>{items.length}</b>
+            <b>{data.total}</b>
           <span>alertas visibles</span>
         </div>
       </div>
@@ -138,7 +140,7 @@ export function AlertRegister() {
               const reset = { date_from: "", date_to: "", state: "" };
               setFilters(reset);
               setError("");
-              load(reset).catch((reason) =>
+              load(1, reset).catch((reason) =>
                 setError(
                   reason instanceof Error
                     ? reason.message
@@ -154,7 +156,7 @@ export function AlertRegister() {
           onSubmit={(event) => {
             event.preventDefault();
             setError("");
-            load().catch((reason) =>
+            load(1).catch((reason) =>
               setError(
                 reason instanceof Error ? reason.message : "No fue posible actualizar el registro.",
               ),
@@ -215,7 +217,7 @@ export function AlertRegister() {
               </tr>
             </thead>
             <tbody>
-              {items.map((alert) => {
+               {data.items.map((alert) => {
                 const latest = latestAttempt(alert);
                 const closed = closedStatuses.has(alert.status);
                 return (
@@ -275,11 +277,12 @@ export function AlertRegister() {
             </tbody>
           </table>
         </div>
-        {!items.length && !error && (
+        {!data.items.length && !error && (
           <div className="empty-state">
             No hay alertas que coincidan con los filtros seleccionados.
           </div>
         )}
+        <Pagination data={data} onPageChange={(page) => load(page).catch(() => setError("No fue posible cargar la página."))} />
       </section>
       {selected && <AlertDetails alert={selected} onClose={() => setSelected(null)} />}
     </>

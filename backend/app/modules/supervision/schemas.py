@@ -8,6 +8,10 @@ class AssignmentCreate(BaseModel):
     reason: str = Field(min_length=1, max_length=4000)
 
 
+class BulkAssignmentCreate(AssignmentCreate):
+    alert_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class CustomerAssignmentHistoryResponse(BaseModel):
     id: str
     customer_id: str

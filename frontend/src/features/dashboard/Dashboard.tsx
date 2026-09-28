@@ -2,43 +2,35 @@ import { useEffect, useState } from "react";
 import { api } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { Modal } from "../../components/Modal";
-import type { Alert, TypificationTree, User } from "../../services/types";
-type Metrics = {
-  alerts_considered: number;
-  contact_rate: number;
-  repurchase_rate: number;
-  average_days_between_purchases?: number | null;
-};
+import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
+import type { Alert, Metrics, Paged, TypificationTree, User } from "../../services/types";
 export function Dashboard({ user }: { user: User }) {
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [alertPage, setAlertPage] = useState<Paged<Alert>>({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 });
   const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [users, setUsers] = useState<User[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [typifications, setTypifications] = useState<TypificationTree[]>([]);
   const [parentTypificationId, setParentTypificationId] = useState("");
   const [childTypificationId, setChildTypificationId] = useState("");
   const [managementError, setManagementError] = useState("");
   useEffect(() => {
-    api<Alert[]>("/alerts/inbox")
-      .then(setAlerts)
+    api<Paged<Alert> | Alert[]>(`/alerts/inbox?page=1&page_size=${PAGE_SIZE}`)
+      .then((value) => setAlertPage(asPaged(value)))
       .catch(() => {});
     if (user.role !== "ASESOR") {
       api<Metrics>("/reports/metrics")
         .then(setMetrics)
         .catch(() => {});
-      if (user.role === "ADMIN")
-        api<User[]>("/users")
-          .then(setUsers)
-          .catch(() => {});
     }
     if (user.role === "ASESOR")
       api<TypificationTree[]>("/configuration/contact-typifications/tree")
         .then(setTypifications)
         .catch(() => {});
   }, [user.role]);
-  const open = alerts.filter((a) =>
-    ["PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA"].includes(a.status),
-  );
+  const alerts = alertPage.items;
+  const loadAlerts = (page: number) =>
+    api<Paged<Alert> | Alert[]>(`/alerts/inbox?page=${page}&page_size=${PAGE_SIZE}`).then((value) =>
+      setAlertPage(asPaged(value, page)),
+    );
   const rootTypifications = typifications.filter((item) => item.is_active);
   const selectedParent = rootTypifications.find((item) => item.id === parentTypificationId);
   const childTypifications = selectedParent?.children.filter((item) => item.is_active) || [];
@@ -78,7 +70,7 @@ export function Dashboard({ user }: { user: User }) {
         }),
       });
       closeAlert();
-      setAlerts(await api<Alert[]>("/alerts/inbox"));
+       await loadAlerts(alertPage.page);
     } catch (reason) {
       setManagementError(
         reason instanceof Error ? reason.message : "No fue posible registrar la gestión.",
@@ -95,18 +87,19 @@ export function Dashboard({ user }: { user: User }) {
         <p>{new Intl.DateTimeFormat("es-PE", { dateStyle: "full" }).format(new Date())}</p>
       </div>
       <section className="stats">
-        <StatCard label="Alertas activas" value={open.length} />
+        <StatCard label="Alertas activas" value={metrics ? metrics.alerts_considered : alertPage.total} />
         <StatCard
-          label="Para hoy"
+          label={metrics ? "Gestionadas" : "Para hoy"}
           value={
-            alerts.filter((a) => a.next_action_date === new Date().toISOString().slice(0, 10))
-              .length
+            metrics
+              ? metrics.advisor_ranking.reduce((total, advisor) => total + advisor.managed_alerts, 0)
+              : alerts.filter((a) => a.next_action_date === new Date().toISOString().slice(0, 10)).length
           }
           accent="orange"
         />
         <StatCard
           label="Atendidas"
-          value={alerts.filter((a) => a.attempts_count > 0).length}
+          value={metrics ? metrics.repurchase_denominator : alerts.filter((a) => a.attempts_count > 0).length}
           accent="green"
         />
         <StatCard
@@ -120,12 +113,9 @@ export function Dashboard({ user }: { user: User }) {
           <article className="panel">
             <h2>Tipificaciones de atención</h2>
             <div className="bars">
-              <i style={{ height: "74%" }} />
-              <i style={{ height: "48%" }} />
-              <i style={{ height: "61%" }} />
-              <i style={{ height: "32%" }} />
+              {(metrics?.attention_typifications || []).map((item) => <i key={item.typification_id} title={`${item.typification_name}: ${item.attempts}`} style={{ height: `${Math.max(8, (item.attempts / Math.max(...(metrics?.attention_typifications.map((x) => x.attempts) || [1]))) * 100)}%` }} />)}
             </div>
-            <small>Seguimiento &nbsp; Sin respuesta &nbsp; No interesado &nbsp; Otros</small>
+            <small>{metrics?.attention_typifications.map((item) => `${item.typification_name} (${item.attempts})`).join(" · ") || "Sin gestiones tipificadas"}</small>
           </article>
           <article className="panel">
             <h2>Ventas por recompra</h2>
@@ -135,18 +125,15 @@ export function Dashboard({ user }: { user: User }) {
             <p>Conversión de alertas atendidas</p>
           </article>
           <article className="panel advisors">
-            <h2>Asesores</h2>
-            {users
-              .filter((x) => x.role === "ASESOR")
-              .slice(0, 5)
-              .map((x) => (
-                <p key={x.id}>
-                  <span className="avatar">{x.full_name[0]}</span>
-                  {x.full_name}
-                  <small>{x.is_active ? "Activo" : "Inactivo"}</small>
+            <h2>Ranking de asesores</h2>
+            {metrics?.advisor_ranking.slice(0, 5).map((advisor) => (
+                <p key={advisor.advisor_id}>
+                  <span className="avatar">{advisor.advisor_name[0]}</span>
+                  {advisor.advisor_name}
+                  <small>{advisor.confirmed_repurchases} recompras · {advisor.managed_alerts} gestionadas</small>
                 </p>
               ))}
-            {!users.length && <p>La lista de asesores está disponible para administradores.</p>}
+            {!metrics?.advisor_ranking.length && <p>No hay actividad de asesores en el periodo.</p>}
           </article>
         </section>
       )}
@@ -179,6 +166,7 @@ export function Dashboard({ user }: { user: User }) {
             ))}
             {!alerts.length && <p>No hay alertas activas.</p>}
           </div>
+          <Pagination data={alertPage} onPageChange={(page) => loadAlerts(page).catch(() => {})} />
         </section>
       ) : (
         <section className="panel">
@@ -212,6 +200,7 @@ export function Dashboard({ user }: { user: User }) {
               </tbody>
             </table>
           </div>
+          <Pagination data={alertPage} onPageChange={(page) => loadAlerts(page).catch(() => {})} />
         </section>
       )}
       {selectedAlert && (

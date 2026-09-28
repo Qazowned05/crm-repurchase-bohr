@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
 import { ConfirmModal, Modal } from "../../components/Modal";
 import { api } from "../../services/api";
+import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import type {
   CatalogItem,
   Customer,
   Product,
   ProductRepurchaseRule,
-  User,
+  Paged, User,
 } from "../../services/types";
 type Kind = "customers" | "products" | "users";
 const definitions = {
@@ -45,20 +46,22 @@ const definitions = {
   },
 } as const;
 export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
-  const [rows, setRows] = useState<Array<Customer | Product | User>>([]);
+  const [data, setData] = useState<Paged<Customer | Product | User>>({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 });
   const [editing, setEditing] = useState<Customer | Product | User | null | undefined>(undefined);
   const [creatingProduct, setCreatingProduct] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [catalog, setCatalog] = useState<"brands" | "product-categories" | null>(null);
   const d = definitions[kind];
-  const load = () =>
-    api<Array<Customer | Product | User>>(
-      `/${kind}${kind === "products" ? "?include_inactive=true" : ""}`,
-    ).then(setRows);
+  const load = (page = data.page) => {
+    const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+    if (kind === "products") query.set("include_inactive", "true");
+    return api<Paged<Customer | Product | User> | Array<Customer | Product | User>>(`/${kind}?${query}`).then((value) => setData(asPaged(value, page)));
+  };
   useEffect(() => {
-    load().catch(() => setRows([]));
+    load().catch(() => setData({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 }));
   }, [kind]);
+  const rows = data.items;
   const display = (r: Customer | Product | User) =>
     "full_name" in r
       ? [r.full_name, r.email, r.role, r.is_active ? "Activo" : "Inactivo"]
@@ -146,6 +149,7 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
             </tbody>
           </table>
         </div>
+        <Pagination data={data} onPageChange={(page) => load(page).catch(() => {})} />
       </section>
       {editing !== undefined && kind !== "products" && (
         <CrudModal
@@ -259,10 +263,10 @@ function ProductCreateModal({
   const [brands, setBrands] = useState<CatalogItem[]>([]);
   const [categories, setCategories] = useState<CatalogItem[]>([]);
   useEffect(() => {
-    Promise.all([api<CatalogItem[]>("/brands"), api<CatalogItem[]>("/product-categories")])
+    Promise.all([api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"), api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200")])
       .then(([brandRows, categoryRows]) => {
-        setBrands(brandRows);
-        setCategories(categoryRows);
+        setBrands(asPaged(brandRows).items);
+        setCategories(asPaged(categoryRows).items);
       })
       .catch(() => setError("No fue posible cargar marcas y categorías."));
   }, []);
@@ -369,10 +373,10 @@ function ProductEditModal({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    Promise.all([api<CatalogItem[]>("/brands"), api<CatalogItem[]>("/product-categories")])
+    Promise.all([api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"), api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200")])
       .then(([brandRows, categoryRows]) => {
-        setBrands(brandRows);
-        setCategories(categoryRows);
+        setBrands(asPaged(brandRows).items);
+        setCategories(asPaged(categoryRows).items);
       })
       .catch(() => setError("No fue posible cargar marcas y categorías."));
   }, []);
@@ -464,8 +468,8 @@ function CatalogModal({
   const [deleting, setDeleting] = useState<CatalogItem | null>(null);
   const [error, setError] = useState("");
   const load = () =>
-    api<CatalogItem[]>(`/${endpoint}?include_inactive=true`)
-      .then(setItems)
+    api<Paged<CatalogItem> | CatalogItem[]>(`/${endpoint}?include_inactive=true&page=1&page_size=200`)
+      .then((value) => setItems(asPaged(value).items))
       .catch(() => setError(`No fue posible cargar ${title.toLowerCase()}.`));
   useEffect(() => {
     load();

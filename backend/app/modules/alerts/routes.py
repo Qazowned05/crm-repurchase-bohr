@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
+from app.core.pagination import paginate_items
 from app.dependencies import get_current_user
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.alerts.schemas import AlertResponse, ContactAttemptCreate, ContactAttemptResponse, ManagedAlertResponse
@@ -29,8 +30,8 @@ def assert_alert_access(alert: Alert, user: User) -> None:
         raise HTTPException(status_code=403, detail="You can only manage your assigned alerts")
 
 
-@router.get("/inbox", response_model=list[AlertResponse])
-def inbox(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
+@router.get("/inbox")
+def inbox(page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict] | dict:
     today = date.today()
     # Catch up after a restart or a system date change before reading the inbox.
     run_alert_generation(today, db)
@@ -44,17 +45,18 @@ def inbox(current_user: User = Depends(get_current_user), db: Session = Depends(
     query = (advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()).order_by(priority, Alert.next_action_date, Alert.alert_date)
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
-    return [alert_response(alert, db) for alert in db.scalars(query)]
+    return paginate_items([alert_response(alert, db) for alert in db.scalars(query)], page, page_size)
 
 
-@router.get("/register", response_model=list[ManagedAlertResponse])
+@router.get("/register")
 def managed_register(
     date_from: date | None = None,
     date_to: date | None = None,
     state: str | None = Query(default=None, pattern="^(open-follow-up|closed)$"),
+    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[dict]:
+) -> list[dict] | dict:
     """Persistent managed-alert register; unlike inbox, it includes follow-up and closed alerts."""
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="date_from cannot exceed date_to")
@@ -69,7 +71,8 @@ def managed_register(
         query = query.where(Alert.status.not_in(FINAL_STATUSES))
     elif state == "closed":
         query = query.where(Alert.status.in_(FINAL_STATUSES))
-    return [managed_alert_response(alert, db) for alert in db.scalars(query.order_by(Alert.alert_date.desc(), Alert.created_at.desc()))]
+    rows = [managed_alert_response(alert, db) for alert in db.scalars(query.order_by(Alert.alert_date.desc(), Alert.created_at.desc()))]
+    return paginate_items(rows, page, page_size)
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)
@@ -79,11 +82,12 @@ def get_alert(alert_id: str, current_user: User = Depends(get_current_user), db:
     return alert_response(alert, db)
 
 
-@router.get("/{alert_id}/attempts", response_model=list[ContactAttemptResponse])
-def list_attempts(alert_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[AlertContactAttempt]:
+@router.get("/{alert_id}/attempts")
+def list_attempts(alert_id: str, page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict] | dict:
     alert = alert_or_404(alert_id, db)
     assert_alert_access(alert, current_user)
-    return [contact_attempt_response(attempt, db) for attempt in db.scalars(select(AlertContactAttempt).where(AlertContactAttempt.alert_id == alert.id).order_by(AlertContactAttempt.contacted_at, AlertContactAttempt.id))]
+    rows = [contact_attempt_response(attempt, db) for attempt in db.scalars(select(AlertContactAttempt).where(AlertContactAttempt.alert_id == alert.id).order_by(AlertContactAttempt.contacted_at, AlertContactAttempt.id))]
+    return paginate_items(rows, page, page_size)
 
 
 @router.post("/{alert_id}/attempts", response_model=AlertResponse)

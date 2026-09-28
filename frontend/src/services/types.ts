@@ -1,4 +1,5 @@
 export type Role = "ASESOR" | "SUPERVISOR" | "ADMIN";
+export type Paged<T> = { items: T[]; page: number; page_size: number; total: number; pages: number };
 export type User = { id: string; email: string; full_name: string; role: Role; is_active: boolean };
 export type Customer = {
   id: string;
@@ -148,4 +149,27 @@ export type AdvisorSalesMetrics = {
   confirmed_items: number;
   repurchase_sales: number;
   repurchase_items: number;
+};
+export type AdvisorRanking = {
+  advisor_id: string;
+  advisor_name: string;
+  confirmed_repurchases: number;
+  managed_alerts: number;
+  contact_attempts: number;
+  closed_alerts: number;
+};
+export type AttentionTypification = {
+  typification_id: string;
+  typification_code: string;
+  typification_name: string;
+  attempts: number;
+};
+export type Metrics = {
+  alerts_considered: number;
+  contact_rate: number;
+  repurchase_rate: number;
+  repurchase_denominator: number;
+  average_days_between_purchases?: number | null;
+  advisor_ranking: AdvisorRanking[];
+  attention_typifications: AttentionTypification[];
 };

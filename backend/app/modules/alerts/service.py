@@ -56,7 +56,7 @@ def contact_attempt_response(attempt: AlertContactAttempt, db: Session) -> dict:
     parent = db.get(ContactTypification, typification.parent_id) if typification and typification.parent_id else None
     advisor = db.get(User, attempt.advisor_id)
     return {
-        **{column.name: getattr(attempt, column.name) for column in AlertContactAttempt.__table__.columns},
+        **{column.name: getattr(attempt, column.name) for column in AlertContactAttempt.__table__.columns if column.name != "typification_id"},
         "observation": attempt.note,
         "user_name": advisor.full_name if advisor else None,
         # A root typification is the parent classification; a descendant is the child classification.

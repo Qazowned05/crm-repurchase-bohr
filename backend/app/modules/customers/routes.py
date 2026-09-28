@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
+from app.core.pagination import paginate_items
 from app.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
@@ -35,19 +36,20 @@ def validate_responsible(advisor_id: str | None, db: Session) -> None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Responsible advisor must be active")
 
 
-@router.get("", response_model=list[CustomerResponse])
+@router.get("", response_model=None)
 def list_customers(
     q: str | None = Query(default=None, max_length=120),
+    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[Customer]:
+) -> list[Customer] | dict:
     query = select(Customer).order_by(Customer.last_names, Customer.first_names)
     if current_user.role == "ASESOR":
         query = query.where(Customer.responsible_advisor_id == current_user.id)
     if q:
         term = f"%{q.strip()}%"
         query = query.where(or_(Customer.dni.ilike(term), Customer.first_names.ilike(term), Customer.last_names.ilike(term)))
-    return list(db.scalars(query))
+    return paginate_items(list(db.scalars(query)), page, page_size)
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
@@ -57,14 +59,14 @@ def get_customer(customer_id: str, current_user: User = Depends(get_current_user
     return customer
 
 
-@router.get("/{customer_id}/sales", response_model=list[SaleResponse])
+@router.get("/{customer_id}/sales", response_model=None)
 def customer_sales_history(
-    customer_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> list[dict]:
+    customer_id: str, page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[dict] | dict:
     customer = get_customer_or_404(customer_id, db)
     assert_customer_access(customer, current_user)
     sales = db.scalars(select(Sale).where(Sale.customer_id == customer.id).order_by(Sale.sale_date.desc(), Sale.created_at.desc()))
-    return [sale_response(sale, db) for sale in sales]
+    return paginate_items([sale_response(sale, db) for sale in sales], page, page_size)
 
 
 @router.post("", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)

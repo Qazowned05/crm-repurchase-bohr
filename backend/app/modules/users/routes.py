@@ -1,12 +1,13 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
+from app.core.pagination import paginate_items
 from app.core.security import hash_password
 from app.dependencies import require_roles
 from app.modules.auth.models import User
@@ -34,11 +35,11 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
-@router.get("", response_model=list[UserResponse])
+@router.get("", response_model=None)
 def list_users(
-    _: User = Depends(require_roles("ADMIN")), db: Session = Depends(get_db)
-) -> list[User]:
-    return list(db.scalars(select(User).order_by(User.full_name)))
+    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), _: User = Depends(require_roles("ADMIN")), db: Session = Depends(get_db)
+) -> list[User] | dict:
+    return paginate_items(list(db.scalars(select(User).order_by(User.full_name))), page, page_size)
 
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

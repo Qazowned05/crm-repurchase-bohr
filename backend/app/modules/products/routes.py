@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.audit import record_audit
 from app.core.database import get_db
+from app.core.pagination import paginate_items
 from app.dependencies import get_current_user, require_roles
 from app.modules.auth.models import User
 from app.modules.products.models import Brand, Product, ProductCategory, ProductRepurchaseRule
@@ -36,16 +37,17 @@ def product_response(product: Product) -> dict:
             "created_at": product.created_at, "updated_at": product.updated_at}
 
 
-@router.get("", response_model=list[ProductResponse])
+@router.get("", response_model=None)
 def list_products(
     include_inactive: bool = False,
+    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     _: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[dict]:
+) -> list[dict] | dict:
     query = select(Product).options(selectinload(Product.brand), selectinload(Product.category)).order_by(Product.name)
     if not include_inactive:
         query = query.where(Product.is_active.is_(True))
-    return [product_response(product) for product in db.scalars(query)]
+    return paginate_items([product_response(product) for product in db.scalars(query)], page, page_size)
 
 
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
@@ -104,18 +106,19 @@ def update_product(
     return product_response(product)
 
 
-@router.get("/{product_id}/rules", response_model=list[RuleResponse])
+@router.get("/{product_id}/rules", response_model=None)
 def list_rules(
-    product_id: str, _: User = Depends(get_current_user), db: Session = Depends(get_db)
-) -> list[ProductRepurchaseRule]:
+    product_id: str, page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), _: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[ProductRepurchaseRule] | dict:
     get_product_or_404(product_id, db)
-    return list(
+    rows = list(
         db.scalars(
             select(ProductRepurchaseRule)
             .where(ProductRepurchaseRule.product_id == product_id)
             .order_by(ProductRepurchaseRule.effective_from.desc())
         )
     )
+    return paginate_items(rows, page, page_size)
 
 
 @router.post("/{product_id}/rules", response_model=RuleResponse, status_code=status.HTTP_201_CREATED)
@@ -161,12 +164,12 @@ def create_rule(
 
 
 def catalog_routes(router: APIRouter, model: type[Brand] | type[ProductCategory], label: str) -> None:
-    @router.get("", response_model=list[CatalogResponse])
-    def list_records(include_inactive: bool = False, _: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[Brand | ProductCategory]:
+    @router.get("", response_model=None)
+    def list_records(include_inactive: bool = False, page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), _: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[Brand | ProductCategory] | dict:
         query = select(model).order_by(model.name)
         if not include_inactive:
             query = query.where(model.is_active.is_(True))
-        return list(db.scalars(query))
+        return paginate_items(list(db.scalars(query)), page, page_size)
 
     @router.post("", response_model=CatalogResponse, status_code=status.HTTP_201_CREATED)
     def create_record(payload: CatalogCreate, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> Brand | ProductCategory:
