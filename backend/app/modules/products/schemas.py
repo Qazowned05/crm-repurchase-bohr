@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field, field_validator
 class ProductCreate(BaseModel):
     code: str = Field(min_length=2, max_length=60)
     name: str = Field(min_length=2, max_length=180)
-    category: str = Field(min_length=2, max_length=120)
+    brand_id: str
+    category_id: str
 
     @field_validator("code")
     @classmethod
@@ -16,7 +17,8 @@ class ProductCreate(BaseModel):
 
 class ProductUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=180)
-    category: str | None = Field(default=None, min_length=2, max_length=120)
+    brand_id: str | None = None
+    category_id: str | None = None
     is_active: bool | None = None
 
 
@@ -24,9 +26,6 @@ class RuleCreate(BaseModel):
     duration_days: int = Field(gt=0, le=730)
     alert_days: list[int] = Field(min_length=1, max_length=5)
     effective_from: date
-    medical_approval_reference: str = Field(min_length=2, max_length=120)
-    medical_approved_by: str = Field(min_length=2, max_length=255)
-    medical_approved_at: datetime
 
     @field_validator("alert_days")
     @classmethod
@@ -46,9 +45,6 @@ class RuleResponse(BaseModel):
     duration_days: int
     alert_days: list[int]
     effective_from: date
-    medical_approval_reference: str
-    medical_approved_by: str
-    medical_approved_at: datetime
     created_by_user_id: str
     created_at: datetime
 
@@ -59,8 +55,42 @@ class ProductResponse(BaseModel):
     id: str
     code: str
     name: str
-    category: str
+    brand_id: str
+    category_id: str
+    brand_name: str
+    category_name: str
     is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CatalogCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    is_active: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Name cannot be blank")
+        return value
+
+
+class CatalogUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else value
+
+
+class CatalogResponse(CatalogCreate):
+    id: str
     created_at: datetime
     updated_at: datetime
 

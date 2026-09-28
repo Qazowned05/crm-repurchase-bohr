@@ -37,7 +37,7 @@ def workbook(headers: list[str], rows: list[list[object]], formula: bool = False
 
 
 CUSTOMER_HEADERS = ["dni", "first_names", "last_names", "phone", "email", "responsible_advisor_email"]
-PRODUCT_HEADERS = ["code", "name", "category", "is_active", "duration_days", "alert_days", "effective_from", "medical_approval_reference", "medical_approved_by", "medical_approved_at"]
+PRODUCT_HEADERS = ["code", "name", "brand", "category", "is_active", "duration_days", "alert_days", "effective_from"]
 
 
 def preview(client: TestClient, headers: dict[str, str], import_type: str, content: bytes, **data: str) -> dict:
@@ -74,7 +74,16 @@ def test_clean_import_commits_customers_and_versioned_product_rule(client: TestC
     assert committed.status_code == 200
     assert committed.json()["state"] == "COMMITTED"
     assert db.query(Customer).count() == 1
-    product_job = preview(client, headers, "products", workbook(PRODUCT_HEADERS, [["COL-001", "Colageno", "Suplementos", "true", "30", "15,5", "2026-01-01", "MED-01", "Dra Vega", "2026-01-01T09:00:00+00:00"]]))
+    assert client.post("/api/v1/brands", headers=headers, json={"name": "Bohr"}).status_code == 201
+    assert client.post("/api/v1/product-categories", headers=headers, json={"name": "Suplementos"}).status_code == 201
+    product_job = preview(client, headers, "products", workbook(PRODUCT_HEADERS, [["COL-001", "Colageno", "Bohr", "Suplementos", "true", "30", "15,5", "2026-01-01"]]))
     assert client.post(f"/api/v1/imports/{product_job['id']}/commit", headers=headers).status_code == 200
     assert db.query(Product).count() == 1
     assert db.query(ProductRepurchaseRule).count() == 1
+
+
+def test_product_import_rejects_unknown_catalog_values(client: TestClient, db: Session) -> None:
+    supervisor = make_user(db, "catalog-import@example.com", "SUPERVISOR")
+    result = preview(client, auth(client, supervisor.email), "products", workbook(PRODUCT_HEADERS, [["COL-404", "Colageno", "Desconocida", "Suplementos", "true", "", "", ""]]))
+    assert result["state"] == "PREVIEW_ERRORS"
+    assert "existing active catalog" in result["errors"][0]["message"]

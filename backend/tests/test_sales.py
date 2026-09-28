@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -27,10 +27,12 @@ def customer_and_product(client: TestClient, db: Session) -> tuple[User, dict, d
     advisor_auth = headers(client, advisor.email)
     supervisor_auth = headers(client, supervisor.email)
     customer = client.post("/api/v1/customers", headers=advisor_auth, json={"dni": "70000001", "first_names": "Ana", "last_names": "Torres", "phone": "999999999"}).json()
-    product = client.post("/api/v1/products", headers=supervisor_auth, json={"code": "COL-01", "name": "Colageno", "category": "Suplementos"}).json()
+    brand = client.post("/api/v1/brands", headers=supervisor_auth, json={"name": "Bohr"}).json()
+    category = client.post("/api/v1/product-categories", headers=supervisor_auth, json={"name": "Suplementos"}).json()
+    product = client.post("/api/v1/products", headers=supervisor_auth, json={"code": "COL-01", "name": "Colageno", "brand_id": brand["id"], "category_id": category["id"]}).json()
     rule = client.post(
         f"/api/v1/products/{product['id']}/rules", headers=supervisor_auth,
-        json={"duration_days": 30, "alert_days": [15, 5], "effective_from": "2025-01-01", "medical_approval_reference": "MED-1", "medical_approved_by": "Dra. Vega", "medical_approved_at": datetime.now(timezone.utc).isoformat()},
+        json={"duration_days": 30, "alert_days": [15, 5], "effective_from": "2025-01-01"},
     )
     assert rule.status_code == 201
     return advisor, customer, product, supervisor_auth

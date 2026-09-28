@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -24,8 +24,10 @@ def setup_sale(client: TestClient, db: Session, sale_date: date, duration: int =
     supervisor = make_user(db, f"supervisor-alert{suffix}@example.com", "SUPERVISOR")
     advisor_auth, supervisor_auth = auth(client, advisor.email), auth(client, supervisor.email)
     customer = client.post("/api/v1/customers", headers=advisor_auth, json={"dni": f"8000000{suffix or '1'}", "first_names": "Alicia", "last_names": "Rios", "phone": "999999999"}).json()
-    product = client.post("/api/v1/products", headers=supervisor_auth, json={"code": f"ALT-0{suffix or '1'}", "name": "Producto alerta", "category": "Categoria"}).json()
-    assert client.post(f"/api/v1/products/{product['id']}/rules", headers=supervisor_auth, json={"duration_days": duration, "alert_days": [15, 5], "effective_from": "2020-01-01", "medical_approval_reference": "MED-A", "medical_approved_by": "Dra. A", "medical_approved_at": datetime.now(timezone.utc).isoformat()}).status_code == 201
+    brand = client.post("/api/v1/brands", headers=supervisor_auth, json={"name": f"Marca {suffix or '1'}"}).json()
+    category = client.post("/api/v1/product-categories", headers=supervisor_auth, json={"name": f"Categoria {suffix or '1'}"}).json()
+    product = client.post("/api/v1/products", headers=supervisor_auth, json={"code": f"ALT-0{suffix or '1'}", "name": "Producto alerta", "brand_id": brand["id"], "category_id": category["id"]}).json()
+    assert client.post(f"/api/v1/products/{product['id']}/rules", headers=supervisor_auth, json={"duration_days": duration, "alert_days": [15, 5], "effective_from": "2020-01-01"}).status_code == 201
     sale = client.post("/api/v1/sales", headers=advisor_auth, json={"customer_id": customer["id"], "sale_date": str(sale_date), "acquisition_channel": "TV", "items": [{"product_id": product["id"], "quantity": 1}]}).json()
     return sale, product, supervisor_auth, advisor
 

@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.modules.auth.routes import router as auth_router
 from app.modules.customers.routes import router as customers_router
-from app.modules.products.routes import router as products_router
+from app.modules.products.routes import brands_router, categories_router, router as products_router
 from app.modules.imports.routes import router as imports_router
 from app.modules.sales.routes import router as sales_router
 from app.modules.alerts.routes import router as alerts_router
@@ -25,6 +25,8 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(customers_router)
 app.include_router(products_router)
+app.include_router(brands_router)
+app.include_router(categories_router)
 app.include_router(imports_router)
 app.include_router(sales_router)
 app.include_router(alerts_router)
