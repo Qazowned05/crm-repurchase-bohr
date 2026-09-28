@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import {
   clearToken, createCustomer, createProduct, createRule, createUser, CurrentUser, Customer, getCurrentUser,
@@ -58,6 +58,7 @@ function ModalActions({ onClose, label }: { onClose: () => void; label: string }
 
 function HomePage({ user }: { user: CurrentUser }) { return <section className="page"><PageHeader eyebrow="RESUMEN" title="Panel principal" /><section className="summary-grid"><div className="metric-card"><span>Clientes</span><strong>Gestiona tu cartera</strong><small>Consulta y registra clientes desde un solo lugar.</small></div><div className="metric-card blue"><span>Catalogo</span><strong>Productos y reglas</strong><small>Controla vigencias y alertas comerciales.</small></div><div className="metric-card purple"><span>Sesion activa</span><strong>{user.role}</strong><small>Acceso de {user.full_name}</small></div></section><section className="content-card welcome"><p className="eyebrow">OPERACION COMERCIAL</p><h2>Todo listo para comenzar</h2><p>Usa el menu lateral para administrar clientes, productos, ventas e importaciones. Registra una venta para iniciar el seguimiento de recompra de cada producto.</p></section></section>; }
 function SalesPage({ canManage }: { canManage: boolean }) {
+  const sourceAlertId = new URLSearchParams(useLocation().search).get("source_alert_id");
   const [sales, setSales] = useState<Sale[]>([]); const [customers, setCustomers] = useState<Customer[]>([]); const [products, setProducts] = useState<Product[]>([]); const [showCreate, setShowCreate] = useState(false); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ customer_id: "", sale_date: new Date().toISOString().slice(0, 10), acquisition_channel: "", acquisition_channel_detail: "", notes: "", items: [{ product_id: "", quantity: 1 }] });
   const [review, setReview] = useState<Sale | null>(null); const [annul, setAnnul] = useState<Sale | null>(null); const [replacement, setReplacement] = useState<Sale | null>(null); const [reason, setReason] = useState(""); const [decision, setDecision] = useState<"APROBADA" | "RECHAZADA">("APROBADA");
@@ -65,8 +66,9 @@ function SalesPage({ canManage }: { canManage: boolean }) {
   const load = () => { listSales().then(setSales).catch((reason) => setError(reason.message)); listCustomers().then(setCustomers).catch((reason) => setError(reason.message)); listProducts().then(setProducts).catch((reason) => setError(reason.message)); };
   const emptyForm = { customer_id: "", sale_date: new Date().toISOString().slice(0, 10), acquisition_channel: "", acquisition_channel_detail: "", notes: "", items: [{ product_id: "", quantity: 1 }] };
   useEffect(() => { load(); }, []);
+  useEffect(() => { if (sourceAlertId) setShowCreate(true); }, [sourceAlertId]);
   function message(reason_: unknown, fallback: string) { return reason_ instanceof Error ? reason_.message : fallback; }
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); setNotice(""); try { const sale = await createSale({ ...form, acquisition_channel: form.acquisition_channel || null, acquisition_channel_detail: form.acquisition_channel === "OTROS" ? form.acquisition_channel_detail : null, replaces_sale_id: replacement?.id ?? null }); setShowCreate(false); setForm(emptyForm); setReplacement(null); setNotice(sale.status === "PENDIENTE_REVISION_DUPLICADO" ? "Venta registrada como posible duplicado. Requiere revision de un supervisor." : "Venta registrada correctamente."); load(); } catch (reason_) { setError(message(reason_, "No fue posible registrar la venta")); } }
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setError(""); setNotice(""); try { const sale = await createSale({ ...form, acquisition_channel: form.acquisition_channel || null, acquisition_channel_detail: form.acquisition_channel === "OTROS" ? form.acquisition_channel_detail : null, replaces_sale_id: replacement?.id ?? null, source_alert_id: sourceAlertId }); setShowCreate(false); setForm(emptyForm); setReplacement(null); setNotice(sale.status === "PENDIENTE_REVISION_DUPLICADO" ? "Venta registrada como posible duplicado. Requiere revision de un supervisor." : "Venta registrada correctamente."); load(); } catch (reason_) { setError(message(reason_, "No fue posible registrar la venta")); } }
   function updateItem(index: number, field: "product_id" | "quantity", value: string | number) { const items = [...form.items]; items[index] = { ...items[index], [field]: value }; setForm({ ...form, items }); }
   function openReview(sale: Sale) { setReview(sale); setDecision("APROBADA"); setReason(""); }
   async function submitReview(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!review) return; setError(""); try { await reviewDuplicate(review.id, decision, reason); setReview(null); setNotice(decision === "APROBADA" ? "Duplicado aprobado. La venta quedo confirmada." : "Duplicado rechazado."); load(); } catch (reason_) { setError(message(reason_, "No fue posible resolver el duplicado")); } }
@@ -85,6 +87,7 @@ function SalesPage({ canManage }: { canManage: boolean }) {
 }
 
 function AlertsPage({ canGenerate }: { canGenerate: boolean }) {
+  const navigate = useNavigate();
   const [alerts, setAlerts] = useState<Alert[]>([]); const [selected, setSelected] = useState<Alert | null>(null); const [attempts, setAttempts] = useState<AlertAttempt[]>([]); const [error, setError] = useState(""); const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ channel: "LLAMADA", result: "", note: "", next_action_date: "", close_alert: false });
   const load = () => listAlerts().then(setAlerts).catch((reason) => setError(reason.message)); useEffect(() => { load(); }, []);
