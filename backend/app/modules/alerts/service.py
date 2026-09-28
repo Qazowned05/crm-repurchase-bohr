@@ -1,10 +1,13 @@
 from datetime import date, datetime, timedelta, timezone
+from threading import Event, Lock, Thread
+import logging
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.modules.alerts.models import Alert
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
@@ -13,6 +16,10 @@ from app.modules.sales.models import Sale, SaleItem
 
 FINAL_STATUSES = {"RECOMPRA_LOGRADA", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CANCELADO_POR_ANULACION", "VENCIDO_NO_GESTIONADO"}
 RECOVERABLE_FINAL_STATUSES = {"VENCIDO_NO_GESTIONADO"}
+logger = logging.getLogger(__name__)
+_generation_lock = Lock()
+_scheduler_stop = Event()
+_scheduler_thread: Thread | None = None
 
 
 def active_alerts_query():
@@ -86,11 +93,56 @@ def generate_daily_alerts(run_date: date, db: Session, actor_id: str | None = No
                           closed_at=None if alert_status == "PENDIENTE" else datetime.now(timezone.utc))
             db.add(alert)
             db.flush()
-            record_audit(db, actor_id=actor_id, entity_type="alert", entity_id=alert.id, action="GENERATED", after={"status": alert_status, "sale_item_id": item.id})
+            record_audit(db, actor_id=actor_id, entity_type="alert", entity_id=alert.id, action="GENERATED", after={"status": alert_status, "sale_item_id": item.id, "generation_actor": actor_id or "SYSTEM"})
             created += 1
             pending += alert_status == "PENDIENTE"
             expired += alert_status == "VENCIDO_NO_GESTIONADO"
     return {"created": created, "pending": pending, "expired": expired}
+
+
+def run_alert_generation(run_date: date, db: Session, actor_id: str | None = None) -> dict[str, int]:
+    """Serialize generation and commit it before another caller can inspect alerts."""
+    with _generation_lock:
+        try:
+            result = generate_daily_alerts(run_date, db, actor_id)
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+
+
+def _run_scheduled_generation() -> None:
+    db = SessionLocal()
+    try:
+        run_alert_generation(date.today(), db)
+    except Exception:
+        logger.exception("Automatic alert generation failed")
+    finally:
+        db.close()
+
+
+def _scheduler_loop() -> None:
+    _run_scheduled_generation()
+    while not _scheduler_stop.wait(settings.alert_scheduler_poll_seconds):
+        _run_scheduled_generation()
+
+
+def start_alert_scheduler() -> None:
+    global _scheduler_thread
+    if _scheduler_thread and _scheduler_thread.is_alive():
+        return
+    _scheduler_stop.clear()
+    _scheduler_thread = Thread(target=_scheduler_loop, name="alert-scheduler", daemon=True)
+    _scheduler_thread.start()
+
+
+def stop_alert_scheduler() -> None:
+    global _scheduler_thread
+    _scheduler_stop.set()
+    if _scheduler_thread:
+        _scheduler_thread.join(timeout=5)
+        _scheduler_thread = None
 
 
 def close_alerts_for_repurchase(customer_id: str, product_ids: set[str], new_sale_id: str, db: Session, actor_id: str | None, source_alert_id: str | None = None) -> None:

@@ -2,7 +2,15 @@ import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
 import { Modal } from "../../components/Modal";
 import { api } from "../../services/api";
-import type { Customer, Product } from "../../services/types";
+import { StatCard } from "../../components/StatCard";
+import type {
+  AdvisorSalesMetrics,
+  AlertGeneration,
+  Customer,
+  Product,
+  Sale,
+  User,
+} from "../../services/types";
 
 type SaleLine = { product_id: string; quantity: number };
 
@@ -17,25 +25,34 @@ const customerFields = [
   { name: "sales_district", label: "Distrito de venta" },
 ];
 
-export function Sales() {
+export function Sales({ user }: { user: User }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [metrics, setMetrics] = useState<AdvisorSalesMetrics | null>(null);
   const [open, setOpen] = useState(false);
   const [customerModal, setCustomerModal] = useState(false);
   const [customerId, setCustomerId] = useState("");
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
   const [channel, setChannel] = useState("TV");
   const [error, setError] = useState("");
+  const [generationMessage, setGenerationMessage] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const advisor = user.role === "ASESOR";
   const load = async () => {
-    const [customerRows, productRows] = await Promise.all([
+    const [customerRows, productRows, saleRows, advisorMetrics] = await Promise.all([
       api<Customer[]>("/customers"),
       api<Product[]>("/products"),
+      api<Sale[]>("/sales"),
+      advisor ? api<AdvisorSalesMetrics>("/sales/me/metrics") : Promise.resolve(null),
     ]);
     setCustomers(customerRows);
     setProducts(productRows.filter((product) => product.is_active));
+    setSales(saleRows);
+    setMetrics(advisorMetrics);
   };
   useEffect(() => {
-    load().catch(() => setError("No fue posible cargar clientes o productos."));
+    load().catch(() => setError("No fue posible cargar el espacio de ventas."));
   }, []);
   const closeSale = () => {
     setOpen(false);
@@ -72,17 +89,49 @@ export function Sales() {
       });
       closeSale();
       setLines([{ product_id: "", quantity: 1 }]);
+      load().catch(() =>
+        setError("La venta se registró, pero no fue posible actualizar el historial."),
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No fue posible registrar la venta.");
     }
   };
+  const generateAlerts = async () => {
+    setGenerating(true);
+    setGenerationMessage("");
+    try {
+      const result = await api<AlertGeneration>("/alerts/generate", { method: "POST" });
+      setGenerationMessage(`Alertas generadas para ${result.run_date}: ${result.created} nuevas.`);
+    } catch (reason) {
+      setGenerationMessage(
+        reason instanceof Error ? reason.message : "No fue posible generar alertas.",
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
+  const customerName = (customerId: string) => {
+    const customer = customers.find((row) => row.id === customerId);
+    return customer ? `${customer.last_names} ${customer.first_names}` : customerId;
+  };
+  const saleProducts = (sale: Sale) =>
+    sale.items
+      .map((item) => {
+        const product = products.find((row) => row.id === item.product_id);
+        return `${product ? product.name : item.product_id} x${item.quantity}`;
+      })
+      .join(", ");
   return (
     <>
       <div className="page-title">
         <div>
           <p className="eyebrow">VENTAS</p>
-          <h1>Registrar venta</h1>
-          <p>Registra una venta y activa el seguimiento de recompra.</p>
+          <h1>Ventas</h1>
+          <p>
+            {advisor
+              ? "Registra y consulta tus ventas."
+              : "Consulta las ventas registradas por el equipo."}
+          </p>
         </div>
         <button
           onClick={() => {
@@ -93,12 +142,101 @@ export function Sales() {
           Registrar venta
         </button>
       </div>
+      {advisor && (
+        <section className="stats">
+          <StatCard label="Ventas confirmadas" value={metrics?.confirmed_sales ?? "-"} />
+          <StatCard
+            label="Productos confirmados"
+            value={metrics?.confirmed_items ?? "-"}
+            accent="green"
+          />
+          <StatCard label="Recompras" value={metrics?.repurchase_sales ?? "-"} accent="purple" />
+          <StatCard
+            label="Productos en recompra"
+            value={metrics?.repurchase_items ?? "-"}
+            accent="orange"
+          />
+        </section>
+      )}
+      {!advisor && (
+        <section className="panel sales-operations">
+          <div className="panel-heading">
+            <div>
+              <h2>Generación de alertas</h2>
+              <p>
+                Genera las alertas pendientes hoy. La generación programada se habilitará en una
+                próxima operación.
+              </p>
+            </div>
+            <button onClick={generateAlerts} disabled={generating}>
+              {generating ? "Generando..." : "Generar alertas"}
+            </button>
+          </div>
+          {generationMessage && (
+            <p
+              className={
+                generationMessage.includes("No fue posible") ? "form-error" : "success-message"
+              }
+            >
+              {generationMessage}
+            </p>
+          )}
+        </section>
+      )}
       <section className="panel">
-        <h2>Flujo de ventas</h2>
+        <h2>{advisor ? "Tu espacio de ventas" : "Registro de ventas"}</h2>
         <p>
-          Selecciona un cliente existente o crea uno durante el registro. Solo se muestran productos
+          Selecciona un cliente existente o créalo durante el registro. Solo se muestran productos
           activos.
         </p>
+      </section>
+      <section className="panel sales-history">
+        <div className="panel-heading">
+          <div>
+            <h2>{advisor ? "Mi historial de ventas" : "Historial de ventas"}</h2>
+            <p>
+              {advisor
+                ? "Solo se muestran las ventas que registraste."
+                : "Incluye las ventas registradas por todos los asesores."}
+            </p>
+          </div>
+          <span className="header-metric">
+            <b>{sales.length}</b> registros
+          </span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Cliente</th>
+                <th>Productos</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sales.map((sale) => (
+                <tr key={sale.id}>
+                  <td>{sale.sale_date}</td>
+                  <td>{customerName(sale.customer_id)}</td>
+                  <td>{saleProducts(sale)}</td>
+                  <td>
+                    <span
+                      className={`status ${sale.status === "CONFIRMADA" ? "success" : "neutral"}`}
+                    >
+                      {sale.status.replaceAll("_", " ")}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {!sales.length && (
+                <tr>
+                  <td colSpan={4}>No hay ventas registradas.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
       {open && (
         <Modal title="Registrar venta" onClose={closeSale}>

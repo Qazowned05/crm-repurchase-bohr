@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,8 +14,18 @@ from app.modules.users.routes import router as users_router
 from app.modules.supervision.routes import router as supervision_router
 from app.modules.reports.routes import router as reports_router
 from app.modules.configuration.routes import router as configuration_router
+from app.modules.alerts.service import start_alert_scheduler, stop_alert_scheduler
 
-app = FastAPI(title="CRM Fidelizacion API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    start_alert_scheduler()
+    try:
+        yield
+    finally:
+        stop_alert_scheduler()
+
+
+app = FastAPI(title="CRM Fidelizacion API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,

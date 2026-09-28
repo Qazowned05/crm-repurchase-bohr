@@ -437,6 +437,20 @@ form footer,
   padding: 9px 11px;
   font-size: 13px;
 }
+.success-message {
+  margin: 14px 0 0;
+  border-left: 3px solid #00734d;
+  background: #edf7f2;
+  color: #006345;
+  padding: 9px 11px;
+  font-size: 13px;
+}
+.sales-operations .panel-heading {
+  align-items: center;
+}
+.sales-history .header-metric {
+  flex: 0 0 auto;
+}
 
 .filters form {
   margin-top: 16px;

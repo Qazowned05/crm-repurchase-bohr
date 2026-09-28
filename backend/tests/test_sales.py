@@ -85,6 +85,18 @@ def test_advisor_cannot_register_sale_for_another_portfolio(client: TestClient, 
     assert denied.status_code == 403
 
 
+def test_advisor_personal_metrics_only_include_confirmed_sales(client: TestClient, db: Session) -> None:
+    advisor, customer, product, _ = customer_and_product(client, db)
+    auth_headers = headers(client, advisor.email)
+    client.post("/api/v1/sales", headers=auth_headers, json={"customer_id": customer["id"], "sale_date": "2026-01-10", "acquisition_channel": "TV", "items": [{"product_id": product["id"], "quantity": 3}]})
+    client.post("/api/v1/sales", headers=auth_headers, json={"customer_id": customer["id"], "sale_date": "2026-02-10", "items": [{"product_id": product["id"], "quantity": 2}]})
+    metrics = client.get("/api/v1/sales/me/metrics?date_from=2026-02-01", headers=auth_headers)
+    assert metrics.status_code == 200
+    assert metrics.json() == {"confirmed_sales": 1, "confirmed_items": 2, "repurchase_sales": 1, "repurchase_items": 2}
+    supervisor = user(db, "metrics-supervisor@example.com", "SUPERVISOR")
+    assert client.get("/api/v1/sales/me/metrics", headers=headers(client, supervisor.email)).status_code == 403
+
+
 def test_supervisor_can_register_one_replacement_for_annulled_sale(client: TestClient, db: Session) -> None:
     advisor, customer, product, supervisor_auth = customer_and_product(client, db)
     original = client.post(

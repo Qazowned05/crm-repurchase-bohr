@@ -39,6 +39,13 @@ class AnnulSaleCreate(BaseModel):
     reason: str = Field(min_length=3, max_length=4000)
 
 
+class AdvisorSalesMetricsResponse(BaseModel):
+    confirmed_sales: int
+    confirmed_items: int
+    repurchase_sales: int
+    repurchase_items: int
+
+
 class SaleItemResponse(BaseModel):
     id: str
     product_id: str

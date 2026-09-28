@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.dependencies import get_current_user, require_roles
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.alerts.schemas import AlertResponse, ContactAttemptCreate, ContactAttemptResponse, GenerationResponse
-from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, generate_daily_alerts
+from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, run_alert_generation
 from app.modules.alerts.service import advisor_visible_alerts_query
 from app.modules.auth.models import User
 from app.modules.configuration.models import ContactTypification
@@ -32,14 +32,15 @@ def assert_alert_access(alert: Alert, user: User) -> None:
 @router.post("/generate", response_model=GenerationResponse)
 def generate_alerts(run_date: date | None = None, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> dict:
     effective_date = run_date or date.today()
-    result = generate_daily_alerts(effective_date, db, current_user.id)
-    db.commit()
+    result = run_alert_generation(effective_date, db, current_user.id)
     return {"run_date": effective_date, **result}
 
 
 @router.get("/inbox", response_model=list[AlertResponse])
 def inbox(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[Alert]:
     today = date.today()
+    # Catch up after a restart or a system date change before reading the inbox.
+    run_alert_generation(today, db)
     priority = case(
         (Alert.status == "REPROGRAMADO", 4),
         (Alert.next_action_date < today, 0),

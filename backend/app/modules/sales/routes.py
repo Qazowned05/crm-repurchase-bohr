@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -11,7 +11,7 @@ from app.modules.auth.models import User
 from app.modules.customers.models import Customer
 from app.modules.products.models import Product, ProductRepurchaseRule
 from app.modules.sales.models import Sale, SaleDuplicateReview, SaleItem
-from app.modules.sales.schemas import AnnulSaleCreate, DuplicateReviewCreate, SaleCreate, SaleResponse
+from app.modules.sales.schemas import AdvisorSalesMetricsResponse, AnnulSaleCreate, DuplicateReviewCreate, SaleCreate, SaleResponse
 from app.modules.alerts.service import close_alerts_for_annulment, close_alerts_for_repurchase
 from app.modules.alerts.models import Alert
 
@@ -67,7 +67,7 @@ def rule_for(product_id: str, sale_date: date, db: Session) -> ProductRepurchase
 
 
 @router.post("", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
-def create_sale(payload: SaleCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> dict:
     # Serializing a customer's sale writes ensures a concurrent duplicate sees the first commit.
     customer = db.scalar(select(Customer).where(Customer.id == payload.customer_id).with_for_update())
     if customer is None or customer.status != "ACTIVO":
@@ -142,7 +142,7 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(get_current_us
 @router.get("", response_model=list[SaleResponse])
 def list_sales(
     customer_id: str | None = None, sale_date: date | None = None, sale_status: str | None = Query(default=None, alias="status"),
-    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
 ) -> list[dict]:
     query = select(Sale).order_by(Sale.sale_date.desc(), Sale.created_at.desc())
     if current_user.role == "ASESOR":
@@ -154,6 +154,34 @@ def list_sales(
     if sale_status:
         query = query.where(Sale.status == sale_status)
     return [sale_response(sale, db) for sale in db.scalars(query)]
+
+
+@router.get("/me/metrics", response_model=AdvisorSalesMetricsResponse)
+def advisor_sales_metrics(
+    date_from: date | None = None, date_to: date | None = None,
+    current_user: User = Depends(require_roles("ASESOR")), db: Session = Depends(get_db),
+) -> dict[str, int]:
+    query = (
+        select(
+            func.count(func.distinct(Sale.id)),
+            func.coalesce(func.sum(SaleItem.quantity), 0),
+            func.count(func.distinct(case((SaleItem.purchase_type == "RECOMPRA", Sale.id)))),
+            func.coalesce(func.sum(case((SaleItem.purchase_type == "RECOMPRA", SaleItem.quantity), else_=0)), 0),
+        )
+        .join(SaleItem, SaleItem.sale_id == Sale.id)
+        .where(Sale.advisor_id == current_user.id, Sale.status == "CONFIRMADA")
+    )
+    if date_from:
+        query = query.where(Sale.sale_date >= date_from)
+    if date_to:
+        query = query.where(Sale.sale_date <= date_to)
+    confirmed_sales, confirmed_items, repurchase_sales, repurchase_items = db.execute(query).one()
+    return {
+        "confirmed_sales": confirmed_sales,
+        "confirmed_items": confirmed_items,
+        "repurchase_sales": repurchase_sales,
+        "repurchase_items": repurchase_items,
+    }
 
 
 @router.get("/{sale_id}", response_model=SaleResponse)

@@ -24,7 +24,7 @@ export function App() {
   const supervisor = user.role !== "ASESOR";
   const nav: Array<[View, string]> = [
     ["dashboard", "Resumen"],
-    ["sales", "Registrar venta"],
+    ["sales", "Ventas"],
   ];
   if (supervisor)
     nav.push(
@@ -38,7 +38,7 @@ export function App() {
     view === "dashboard" ? (
       <Dashboard user={user} />
     ) : view === "sales" ? (
-      <Sales />
+      <Sales user={user} />
     ) : view === "recovery" ? (
       <RecoveryQueue />
     ) : view === "configuration" ? (

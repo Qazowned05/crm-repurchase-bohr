@@ -77,3 +77,30 @@ export type RecoveryCustomer = {
   phone: string;
   alerts: RecoveryAlert[];
 };
+export type SaleItem = {
+  id: string;
+  product_id: string;
+  quantity: number;
+  purchase_type?: string | null;
+};
+export type Sale = {
+  id: string;
+  customer_id: string;
+  advisor_id: string;
+  sale_date: string;
+  notes?: string | null;
+  status: string;
+  items: SaleItem[];
+};
+export type AdvisorSalesMetrics = {
+  confirmed_sales: number;
+  confirmed_items: number;
+  repurchase_sales: number;
+  repurchase_items: number;
+};
+export type AlertGeneration = {
+  run_date: string;
+  created: number;
+  pending: number;
+  expired: number;
+};

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.modules.alerts.models import Alert, AlertContactAttempt
+from app.modules.audit.models import AuditLog
 from app.modules.auth.models import User
 
 
@@ -41,6 +42,16 @@ def test_generation_is_idempotent_and_uses_current_responsible_advisor(client: T
     alert = db.query(Alert).one()
     assert alert.sale_item_id == sale["items"][0]["id"]
     assert alert.assigned_advisor_id == advisor.id
+
+
+def test_inbox_generates_today_alert_without_manual_generation(client: TestClient, db: Session) -> None:
+    sale, _, _, advisor = setup_sale(client, db, date.today() - timedelta(days=15), suffix="inbox")
+    response = client.get("/api/v1/alerts/inbox", headers=auth(client, advisor.email))
+    assert response.status_code == 200
+    assert [alert["sale_item_id"] for alert in response.json()] == [sale["items"][0]["id"]]
+    assert db.query(Alert).filter_by(sale_item_id=sale["items"][0]["id"]).count() == 1
+    audit = db.query(AuditLog).filter_by(entity_type="alert", action="GENERATED").one()
+    assert audit.actor_id is None and audit.after_data["generation_actor"] == "SYSTEM"
 
 
 def test_past_sale_creates_one_pending_or_expired_alert(client: TestClient, db: Session) -> None:
