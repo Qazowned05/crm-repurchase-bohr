@@ -40,6 +40,8 @@ class RecoveryAlertResponse(BaseModel):
     attempts_count: int
     next_action_date: date | None
     last_contact_at: datetime | None
+    latest_contact_typification: str | None
+    latest_contact_date: datetime | None
     sale_id: str
     sale_date: date
     product_id: str

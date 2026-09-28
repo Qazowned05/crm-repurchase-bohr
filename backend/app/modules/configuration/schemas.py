@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ContactTypificationCreate(BaseModel):
+    parent_id: str | None = None
     code: str = Field(min_length=1, max_length=40)
     name: str = Field(min_length=1, max_length=120)
     is_active: bool = True
@@ -29,6 +30,7 @@ class ContactTypificationCreate(BaseModel):
 
 
 class ContactTypificationUpdate(BaseModel):
+    parent_id: str | None = None
     name: str | None = Field(default=None, min_length=1, max_length=120)
     is_active: bool | None = None
     requires_next_action: bool | None = None
@@ -52,6 +54,10 @@ class ContactTypificationResponse(ContactTypificationCreate):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ContactTypificationTreeResponse(ContactTypificationResponse):
+    children: list["ContactTypificationTreeResponse"] = []
 
 
 class AlertOperationalSettingsUpdate(BaseModel):

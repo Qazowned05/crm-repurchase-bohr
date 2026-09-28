@@ -1,15 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
 from app.dependencies import require_roles
-from app.modules.alerts.models import Alert
+from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.alerts.schemas import AlertResponse
 from app.modules.alerts.service import active_alerts_query
 from app.modules.alerts.service import recovery_alerts_query
 from app.modules.auth.models import User
+from app.modules.configuration.models import ContactTypification
 from app.modules.customers.models import Customer
 from app.modules.customers.routes import validate_responsible
 from app.modules.sales.models import Sale, SaleItem
@@ -37,6 +40,19 @@ def alert_or_404(alert_id: str, db: Session) -> Alert:
     if alert is None:
         raise HTTPException(status_code=404, detail="Alert not found")
     return alert
+
+
+def typification_descendant_codes(typification_id: str, db: Session) -> set[str]:
+    root = db.get(ContactTypification, typification_id)
+    if root is None:
+        raise HTTPException(status_code=404, detail="Contact typification not found")
+    ids = {root.id}
+    pending = [root.id]
+    while pending:
+        children = list(db.scalars(select(ContactTypification).where(ContactTypification.parent_id.in_(pending))))
+        pending = [child.id for child in children if child.id not in ids]
+        ids.update(pending)
+    return set(db.scalars(select(ContactTypification.code).where(ContactTypification.id.in_(ids))))
 
 
 def record_alert_assignment(alert: Alert, advisor_id: str | None, reason: str, actor_id: str, db: Session) -> None:
@@ -90,8 +106,20 @@ def recovery_alerts(current_user: User = Depends(require_roles("SUPERVISOR", "AD
 
 
 @router.get("/recovery-queue", response_model=list[RecoveryCustomerResponse])
-def recovery_queue(current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[dict]:
-    rows = db.execute(
+def recovery_queue(
+    typification_id: str | None = None,
+    min_days_overdue: int | None = Query(default=None, ge=0),
+    max_days_overdue: int | None = Query(default=None, ge=0),
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    if min_days_overdue is not None and max_days_overdue is not None and min_days_overdue > max_days_overdue:
+        raise HTTPException(status_code=422, detail="min_days_overdue cannot exceed max_days_overdue")
+    latest_result = (
+        select(AlertContactAttempt.result).where(AlertContactAttempt.alert_id == Alert.id)
+        .order_by(AlertContactAttempt.contacted_at.desc(), AlertContactAttempt.id.desc()).limit(1).correlate(Alert).scalar_subquery()
+    )
+    query = (
         recovery_alerts_query(db)
         .join(SaleItem, SaleItem.id == Alert.sale_item_id)
         .join(Sale, Sale.id == SaleItem.sale_id)
@@ -99,7 +127,20 @@ def recovery_queue(current_user: User = Depends(require_roles("SUPERVISOR", "ADM
         .join(Product, Product.id == SaleItem.product_id)
         .with_only_columns(Alert, Sale, SaleItem, Customer, Product)
         .order_by(Customer.last_names, Customer.first_names, Alert.alert_date)
-    ).all()
+    )
+    if typification_id is not None:
+        query = query.where(latest_result.in_(typification_descendant_codes(typification_id, db)))
+    today = date.today()
+    if min_days_overdue is not None:
+        query = query.where(Alert.alert_date <= today - timedelta(days=min_days_overdue))
+    if max_days_overdue is not None:
+        query = query.where(Alert.alert_date >= today - timedelta(days=max_days_overdue))
+    rows = db.execute(query).all()
+    alert_ids = [alert.id for alert, *_ in rows]
+    latest_attempts: dict[str, AlertContactAttempt] = {}
+    if alert_ids:
+        for attempt in db.scalars(select(AlertContactAttempt).where(AlertContactAttempt.alert_id.in_(alert_ids)).order_by(AlertContactAttempt.contacted_at.desc(), AlertContactAttempt.id.desc())):
+            latest_attempts.setdefault(attempt.alert_id, attempt)
     grouped: dict[str, dict] = {}
     for alert, sale, item, customer, product in rows:
         customer_row = grouped.setdefault(customer.id, {
@@ -110,6 +151,8 @@ def recovery_queue(current_user: User = Depends(require_roles("SUPERVISOR", "ADM
             "id": alert.id, "status": alert.status, "alert_date": alert.alert_date,
             "expected_repurchase_date": alert.expected_repurchase_date, "attempts_count": alert.attempts_count,
             "next_action_date": alert.next_action_date, "last_contact_at": alert.last_contact_at,
+            "latest_contact_typification": latest_attempts[alert.id].result if alert.id in latest_attempts else None,
+            "latest_contact_date": latest_attempts[alert.id].contacted_at if alert.id in latest_attempts else None,
             "sale_id": sale.id, "sale_date": sale.sale_date, "product_id": product.id,
             "product_code": product.code, "product_name": product.name,
         })
