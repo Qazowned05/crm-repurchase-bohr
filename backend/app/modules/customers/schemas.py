@@ -11,6 +11,9 @@ class CustomerCreate(BaseModel):
     phone: str = Field(min_length=6, max_length=30)
     email: EmailStr | None = None
     responsible_advisor_id: str | None = None
+    condition: str | None = Field(default=None, max_length=500)
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+    sales_district: str | None = Field(default=None, max_length=120)
 
     @field_validator("dni")
     @classmethod
@@ -26,6 +29,9 @@ class CustomerUpdate(BaseModel):
     last_names: str | None = Field(default=None, min_length=2, max_length=120)
     phone: str | None = Field(default=None, min_length=6, max_length=30)
     email: EmailStr | None = None
+    condition: str | None = Field(default=None, max_length=500)
+    birth_year: int | None = Field(default=None, ge=1900, le=2100)
+    sales_district: str | None = Field(default=None, max_length=120)
 
 
 class CustomerSupervisorUpdate(CustomerUpdate):
@@ -44,6 +50,9 @@ class CustomerResponse(BaseModel):
     responsible_advisor_id: str | None
     acquisition_channel: str | None
     acquisition_channel_detail: str | None
+    condition: str | None
+    birth_year: int | None
+    sales_district: str | None
     created_at: datetime
     updated_at: datetime
 

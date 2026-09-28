@@ -87,6 +87,9 @@ def create_customer(
         phone=payload.phone.strip(),
         email=str(payload.email).lower() if payload.email else None,
         responsible_advisor_id=responsible_id,
+        condition=payload.condition.strip() if payload.condition else None,
+        birth_year=payload.birth_year,
+        sales_district=payload.sales_district.strip() if payload.sales_district else None,
     )
     db.add(customer)
     db.flush()
@@ -122,6 +125,8 @@ def update_customer(
     for field, value in changes.items():
         if field == "email" and value is not None:
             value = str(value).lower()
+        if field in {"condition", "sales_district"} and value is not None:
+            value = value.strip() or None
         setattr(customer, field, value)
     record_audit(
         db,

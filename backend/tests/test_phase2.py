@@ -42,6 +42,27 @@ def test_advisor_owns_created_customer(client: TestClient, db: Session) -> None:
     assert db.query(AuditLog).filter_by(entity_type="customer", action="CREATED").count() == 1
 
 
+def test_customer_segmentation_is_optional_and_returned(client: TestClient, db: Session) -> None:
+    advisor = user(db, "advisor@example.com", "ASESOR")
+    auth = headers(client, advisor.email)
+    created = client.post(
+        "/api/v1/customers",
+        headers=auth,
+        json={
+            "dni": "70000002", "first_names": "Beatriz", "last_names": "Luna", "phone": "988888888",
+            "condition": "Hipertensión", "birth_year": 1984, "sales_district": "Miraflores",
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["condition"] == "Hipertensión"
+    assert created.json()["birth_year"] == 1984
+    assert created.json()["sales_district"] == "Miraflores"
+    updated = client.patch(f"/api/v1/customers/{created.json()['id']}", headers=auth, json={"sales_district": "San Isidro"})
+    assert updated.status_code == 200
+    assert updated.json()["sales_district"] == "San Isidro"
+
+
 def test_supervisor_creates_product_and_versioned_rule(client: TestClient, db: Session) -> None:
     supervisor = user(db, "supervisor@example.com", "SUPERVISOR")
     auth = headers(client, supervisor.email)

@@ -4,7 +4,7 @@ import { api } from "../../services/api"
 import type { Customer, Product, User } from "../../services/types"
 type Kind = "customers" | "products" | "users"
 const definitions = {
-  customers: { title: "Clientes", fields: [{ name: "dni", label: "DNI", required: true }, { name: "first_names", label: "Nombres", required: true }, { name: "last_names", label: "Apellidos", required: true }, { name: "phone", label: "Teléfono", required: true }, { name: "email", label: "Correo", type: "email" }] },
+  customers: { title: "Clientes", fields: [{ name: "dni", label: "DNI", required: true }, { name: "first_names", label: "Nombres", required: true }, { name: "last_names", label: "Apellidos", required: true }, { name: "phone", label: "Teléfono", required: true }, { name: "email", label: "Correo", type: "email" }, { name: "condition", label: "Enfermedad o condición" }, { name: "birth_year", label: "Año de nacimiento", type: "number" }, { name: "sales_district", label: "Distrito de venta" }] },
   products: { title: "Productos", fields: [{ name: "code", label: "Código", required: true }, { name: "name", label: "Nombre", required: true }, { name: "category", label: "Categoría", required: true }, { name: "is_active", label: "Activo", type: "checkbox" }] },
   users: { title: "Usuarios", fields: [{ name: "email", label: "Correo", type: "email", required: true }, { name: "full_name", label: "Nombre completo", required: true }, { name: "password", label: "Contraseña", type: "password", required: true }, { name: "role", label: "Rol", required: true, options: [{ value: "ASESOR", label: "Asesor" }, { value: "SUPERVISOR", label: "Supervisor" }, { value: "ADMIN", label: "Administrador" }] }] },
 } as const
