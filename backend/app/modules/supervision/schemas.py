@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -30,3 +30,27 @@ class AlertAssignmentHistoryResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RecoveryAlertResponse(BaseModel):
+    id: str
+    status: str
+    alert_date: date
+    expected_repurchase_date: date
+    attempts_count: int
+    next_action_date: date | None
+    last_contact_at: datetime | None
+    sale_id: str
+    sale_date: date
+    product_id: str
+    product_code: str
+    product_name: str
+
+
+class RecoveryCustomerResponse(BaseModel):
+    customer_id: str
+    dni: str
+    first_names: str
+    last_names: str
+    phone: str
+    alerts: list[RecoveryAlertResponse]

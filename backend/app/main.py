@@ -11,6 +11,7 @@ from app.modules.alerts.routes import router as alerts_router
 from app.modules.users.routes import router as users_router
 from app.modules.supervision.routes import router as supervision_router
 from app.modules.reports.routes import router as reports_router
+from app.modules.configuration.routes import router as configuration_router
 
 app = FastAPI(title="CRM Fidelizacion API", version="0.1.0")
 app.add_middleware(
@@ -29,6 +30,7 @@ app.include_router(sales_router)
 app.include_router(alerts_router)
 app.include_router(supervision_router)
 app.include_router(reports_router)
+app.include_router(configuration_router)
 
 
 @app.get("/health", tags=["system"])

@@ -1,26 +1,13 @@
 from datetime import date, datetime
-from typing import Literal
-
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class ContactAttemptCreate(BaseModel):
-    channel: Literal["LLAMADA", "WHATSAPP", "EMAIL", "OTRO"]
-    result: Literal["RECOMPRA_REGISTRADA", "AUN_TIENE_PRODUCTO", "SOLICITA_SEGUIMIENTO", "SIN_RESPUESTA", "NO_INTERESADO", "DATOS_DE_CONTACTO_INCORRECTOS", "OTRO"]
+    channel: str = Field(min_length=1, max_length=20)
+    result: str = Field(min_length=1, max_length=40)
     note: str | None = Field(default=None, max_length=4000)
     next_action_date: date | None = None
     close_alert: bool = False
-
-    @model_validator(mode="after")
-    def validate_result_requirements(self) -> "ContactAttemptCreate":
-        if self.result in {"AUN_TIENE_PRODUCTO", "SOLICITA_SEGUIMIENTO", "SIN_RESPUESTA"} and self.next_action_date is None:
-            raise ValueError("A next action date is required for this result")
-        if self.result == "OTRO" and not (self.note or "").strip():
-            raise ValueError("A descriptive note is required for OTRO")
-        if self.result == "OTRO" and not self.close_alert and self.next_action_date is None:
-            raise ValueError("OTRO requires a next action date or close_alert")
-        return self
-
 
 class AlertResponse(BaseModel):
     id: str

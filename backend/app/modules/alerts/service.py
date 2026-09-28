@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -8,13 +8,51 @@ from app.core.config import settings
 from app.modules.alerts.models import Alert
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
+from app.modules.configuration.models import AlertOperationalSettings
 from app.modules.sales.models import Sale, SaleItem
 
 FINAL_STATUSES = {"RECOMPRA_LOGRADA", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CANCELADO_POR_ANULACION", "VENCIDO_NO_GESTIONADO"}
+RECOVERABLE_FINAL_STATUSES = {"VENCIDO_NO_GESTIONADO"}
 
 
 def active_alerts_query():
     return select(Alert).where(Alert.status.not_in(FINAL_STATUSES))
+
+
+def alert_settings(db: Session) -> AlertOperationalSettings:
+    record = db.get(AlertOperationalSettings, 1)
+    if record is None:
+        record = AlertOperationalSettings(id=1, advisor_visibility_days=settings.alert_active_window_days)
+        db.add(record)
+        db.flush()
+    return record
+
+
+def advisor_visible_alerts_query(db: Session, today: date | None = None):
+    current_date = today or date.today()
+    config = alert_settings(db)
+    stale_cutoff = datetime.combine(current_date - timedelta(days=config.stale_days), datetime.min.time(), tzinfo=timezone.utc)
+    return active_alerts_query().where(
+        Alert.alert_date >= current_date - timedelta(days=config.advisor_visibility_days),
+        Alert.attempts_count < config.maximum_attempts,
+        func.coalesce(Alert.last_contact_at, Alert.created_at) >= stale_cutoff,
+    )
+
+
+def recovery_alerts_query(db: Session, today: date | None = None):
+    current_date = today or date.today()
+    config = alert_settings(db)
+    stale_cutoff = datetime.combine(current_date - timedelta(days=config.stale_days), datetime.min.time(), tzinfo=timezone.utc)
+    return select(Alert).where(
+        Alert.status.not_in(FINAL_STATUSES - RECOVERABLE_FINAL_STATUSES),
+        or_(
+            Alert.assigned_advisor_id.is_(None),
+            Alert.status.in_(RECOVERABLE_FINAL_STATUSES),
+            Alert.alert_date < current_date - timedelta(days=config.advisor_visibility_days),
+            Alert.attempts_count >= config.maximum_attempts,
+            func.coalesce(Alert.last_contact_at, Alert.created_at) < stale_cutoff,
+        ),
+    )
 
 
 def assigned_advisor(customer: Customer, sale: Sale, db: Session) -> str | None:
@@ -29,6 +67,7 @@ def assigned_advisor(customer: Customer, sale: Sale, db: Session) -> str | None:
 def generate_daily_alerts(run_date: date, db: Session, actor_id: str | None = None) -> dict[str, int]:
     """Generate scheduled alerts once, or one catch-up record for a past cycle."""
     created = pending = expired = 0
+    config = alert_settings(db)
     rows = db.execute(
         select(SaleItem, Sale, Customer).join(Sale, Sale.id == SaleItem.sale_id).join(Customer, Customer.id == Sale.customer_id)
         .where(Sale.status == "CONFIRMADA")
@@ -40,7 +79,7 @@ def generate_daily_alerts(run_date: date, db: Session, actor_id: str | None = No
         if not dates_to_create and item.expected_repurchase_date <= run_date and not existing:
             dates_to_create = {run_date}
         for alert_date in dates_to_create - existing:
-            within_window = item.expected_repurchase_date >= run_date - timedelta(days=settings.alert_active_window_days)
+            within_window = item.expected_repurchase_date >= run_date - timedelta(days=config.advisor_visibility_days)
             alert_status = "PENDIENTE" if within_window else "VENCIDO_NO_GESTIONADO"
             alert = Alert(sale_item_id=item.id, assigned_advisor_id=assigned_advisor(customer, sale, db), alert_date=alert_date,
                           expected_repurchase_date=item.expected_repurchase_date, status=alert_status,
