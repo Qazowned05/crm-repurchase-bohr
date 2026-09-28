@@ -347,9 +347,9 @@ export function Dashboard({ user }: { user: User }) {
             </p>
           </div>
           <form onSubmit={manageAlert}>
-            <fieldset className="form-grid">
+            <fieldset className="management-mode-switch">
               <legend>Resultado de la gestión</legend>
-              <label>
+              <label className={managementMode === "ATTEMPT" ? "is-selected" : ""}>
                 <input
                   type="radio"
                   checked={managementMode === "ATTEMPT"}
@@ -358,9 +358,9 @@ export function Dashboard({ user }: { user: User }) {
                     setManagementError("");
                   }}
                 />
-                Registrar gestión regular
+                Gestión regular
               </label>
-              <label>
+              <label className={managementMode === "REPURCHASE" ? "is-selected" : ""}>
                 <input
                   type="radio"
                   checked={managementMode === "REPURCHASE"}
@@ -373,32 +373,65 @@ export function Dashboard({ user }: { user: User }) {
               </label>
             </fieldset>
             {managementMode === "REPURCHASE" ? (
-              <section className="form-grid">
-                <p className="success-message">
+              <section className="repurchase-confirmation" aria-label="Detalle de la recompra">
+                <p className="repurchase-info-banner">
                   Registra la venta confirmada. Esta acción cerrará la alerta y no requiere
                   tipificación.
                 </p>
-                <label>
-                  Productos de la recompra
-                  <select
-                    value={repurchaseSelection}
-                    onChange={(event) =>
-                      setRepurchaseSelection(event.target.value as RepurchaseSelection)
-                    }
-                  >
-                    <option value="ORIGINAL">Solo producto original</option>
-                    <option value="OTHER">Solo otros productos</option>
-                    <option value="BOTH">Producto original y otros productos</option>
-                  </select>
-                </label>
+                <fieldset className="repurchase-product-choice">
+                  <legend>¿Qué compró?</legend>
+                  <div>
+                    <label className={repurchaseSelection === "ORIGINAL" ? "is-selected" : ""}>
+                      <input
+                        type="radio"
+                        name="repurchase-selection"
+                        value="ORIGINAL"
+                        checked={repurchaseSelection === "ORIGINAL"}
+                        onChange={(event) =>
+                          setRepurchaseSelection(event.target.value as RepurchaseSelection)
+                        }
+                      />
+                      Original
+                    </label>
+                    <label className={repurchaseSelection === "OTHER" ? "is-selected" : ""}>
+                      <input
+                        type="radio"
+                        name="repurchase-selection"
+                        value="OTHER"
+                        checked={repurchaseSelection === "OTHER"}
+                        onChange={(event) =>
+                          setRepurchaseSelection(event.target.value as RepurchaseSelection)
+                        }
+                      />
+                      Otro producto
+                    </label>
+                    <label className={repurchaseSelection === "BOTH" ? "is-selected" : ""}>
+                      <input
+                        type="radio"
+                        name="repurchase-selection"
+                        value="BOTH"
+                        checked={repurchaseSelection === "BOTH"}
+                        onChange={(event) =>
+                          setRepurchaseSelection(event.target.value as RepurchaseSelection)
+                        }
+                      />
+                      Ambos
+                    </label>
+                  </div>
+                </fieldset>
                 {(repurchaseSelection === "ORIGINAL" || repurchaseSelection === "BOTH") && (
-                  <div className="form-grid">
-                    <p>
-                      <b>Producto original:</b>{" "}
-                      {selectedAlert.product_name ||
-                        selectedAlert.product_code ||
-                        "Sin información"}
-                    </p>
+                  <section
+                    className="repurchase-original-line"
+                    aria-labelledby="original-product-title"
+                  >
+                    <div className="repurchase-line-product">
+                      <span id="original-product-title">Producto original</span>
+                      <b>
+                        {selectedAlert.product_name ||
+                          selectedAlert.product_code ||
+                          "Sin información"}
+                      </b>
+                    </div>
                     <label>
                       Cantidad
                       <input
@@ -431,15 +464,30 @@ export function Dashboard({ user }: { user: User }) {
                         required
                       />
                     </label>
-                  </div>
+                  </section>
                 )}
                 {(repurchaseSelection === "OTHER" || repurchaseSelection === "BOTH") && (
-                  <div className="form-grid">
-                    <p>
-                      <b>Otros productos</b>
-                    </p>
+                  <section
+                    className="repurchase-extra-products"
+                    aria-labelledby="extra-products-title"
+                  >
+                    <div className="repurchase-section-heading">
+                      <h3 id="extra-products-title">Otros productos</h3>
+                      <button
+                        type="button"
+                        className="secondary repurchase-add-product"
+                        onClick={() =>
+                          setExtraRepurchaseLines((lines) => [
+                            ...lines,
+                            { product_id: "", quantity: 1, unit_price: 0 },
+                          ])
+                        }
+                      >
+                        Agregar producto
+                      </button>
+                    </div>
                     {extraRepurchaseLines.map((line, index) => (
-                      <div className="form-grid" key={index}>
+                      <div className="repurchase-extra-line" key={index}>
                         <label>
                           Producto
                           <select
@@ -513,30 +561,21 @@ export function Dashboard({ user }: { user: User }) {
                         </label>
                         <button
                           type="button"
-                          className="secondary"
+                          className="secondary repurchase-remove-product"
                           onClick={() =>
                             setExtraRepurchaseLines((lines) =>
                               lines.filter((_, lineIndex) => lineIndex !== index),
                             )
                           }
                         >
-                          Quitar producto
+                          Quitar
                         </button>
                       </div>
                     ))}
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() =>
-                        setExtraRepurchaseLines((lines) => [
-                          ...lines,
-                          { product_id: "", quantity: 1, unit_price: 0 },
-                        ])
-                      }
-                    >
-                      Agregar producto
-                    </button>
-                  </div>
+                    {!extraRepurchaseLines.length && (
+                      <p className="repurchase-empty-lines">Agrega los productos confirmados.</p>
+                    )}
+                  </section>
                 )}
               </section>
             ) : (

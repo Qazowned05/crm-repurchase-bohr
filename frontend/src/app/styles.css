@@ -685,6 +685,157 @@ button.alert-row:hover {
   margin: 4px 0;
   color: #29475e;
 }
+.management-mode-switch,
+.repurchase-product-choice {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.management-mode-switch legend,
+.repurchase-product-choice legend {
+  margin-bottom: 8px;
+  color: #29475e;
+  font-size: 12px;
+  font-weight: 800;
+}
+.management-mode-switch {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid #9db5c8;
+  background: #f4f8fb;
+}
+.management-mode-switch legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.management-mode-switch label,
+.repurchase-product-choice label {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.management-mode-switch label {
+  padding: 7px 12px;
+  color: #526b7d;
+}
+.management-mode-switch label + label {
+  border-left: 1px solid #9db5c8;
+}
+.management-mode-switch label.is-selected,
+.repurchase-product-choice label.is-selected {
+  background: #005a9c;
+  color: #fff;
+}
+.management-mode-switch input,
+.repurchase-product-choice input {
+  width: 14px;
+  min-height: 14px;
+  margin: 0;
+  accent-color: currentColor;
+}
+.repurchase-confirmation {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+}
+.repurchase-info-banner {
+  margin: 0;
+  border-left: 3px solid #00734d;
+  background: #edf7f2;
+  color: #006345;
+  padding: 9px 11px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.repurchase-product-choice > div {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid #9db5c8;
+}
+.repurchase-product-choice label {
+  flex: 1 1 130px;
+  padding: 7px 10px;
+  color: #526b7d;
+}
+.repurchase-product-choice label + label {
+  border-left: 1px solid #9db5c8;
+}
+.repurchase-original-line,
+.repurchase-extra-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px 132px;
+  align-items: end;
+  gap: 10px;
+}
+.repurchase-original-line {
+  border: 1px solid #c7d5df;
+  border-left: 3px solid #005a9c;
+  background: #f4f8fb;
+  padding: 10px;
+}
+.repurchase-line-product {
+  display: grid;
+  min-height: 38px;
+  align-content: center;
+  gap: 3px;
+}
+.repurchase-line-product span {
+  color: #526b7d;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.repurchase-line-product b {
+  overflow: hidden;
+  color: #003b67;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repurchase-extra-products {
+  display: grid;
+  gap: 10px;
+}
+.repurchase-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.repurchase-section-heading h3 {
+  margin: 0;
+  color: #003b67;
+  font-size: 14px;
+}
+.repurchase-add-product,
+.repurchase-remove-product {
+  min-height: 32px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+.repurchase-extra-line {
+  grid-template-columns: minmax(160px, 1fr) 78px 122px auto;
+  border-top: 1px solid #dce5ec;
+  padding-top: 10px;
+}
+.repurchase-remove-product {
+  align-self: end;
+}
+.repurchase-empty-lines {
+  margin: 0;
+  color: #718596;
+  font-size: 13px;
+}
 
 .tree-panel {
   padding: 0;
@@ -1016,5 +1167,41 @@ button.alert-row:hover {
   .modal {
     max-height: calc(100vh - 24px);
     padding: 18px;
+  }
+  .management-mode-switch {
+    width: 100%;
+  }
+  .management-mode-switch label {
+    flex: 1 1 0;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+  .repurchase-original-line,
+  .repurchase-extra-line {
+    grid-template-columns: 1fr 1fr;
+  }
+  .repurchase-line-product,
+  .repurchase-extra-line label:first-child {
+    grid-column: 1 / -1;
+  }
+  .repurchase-remove-product {
+    justify-self: start;
+  }
+}
+@media (max-width: 430px) {
+  .repurchase-product-choice label {
+    flex-basis: 100%;
+  }
+  .repurchase-product-choice label + label {
+    border-top: 1px solid #9db5c8;
+    border-left: 0;
+  }
+  .repurchase-original-line,
+  .repurchase-extra-line {
+    grid-template-columns: 1fr;
+  }
+  .repurchase-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
