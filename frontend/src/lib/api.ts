@@ -48,6 +48,12 @@ export type ImportJob = {
 export type Sale = { id: string; customer_id: string; sale_date: string; status: string; notes: string | null; acquisition_channel: string | null; acquisition_channel_detail: string | null; replaces_sale_id: string | null; annulment_reason: string | null; items: { id: string; product_id: string; quantity: number; purchase_type: string | null; expected_repurchase_date: string }[] };
 export type Alert = { id: string; sale_item_id: string; assigned_advisor_id: string | null; alert_date: string; expected_repurchase_date: string; status: string; attempts_count: number; next_action_date: string | null; last_contact_at: string | null; closed_at: string | null };
 export type AlertAttempt = { id: string; alert_id: string; contacted_at: string; channel: string; result: string; note: string | null; next_action_date: string | null };
+export type PortfolioTransferResult = { customer_id: string; assigned_advisor_id: string | null; transferred_alerts: number };
+export type SalesReportRow = { product_id: string; product: string; channel: string; sale_advisor_id: string; current_portfolio_owner_id: string | null; confirmed_sales: number; repurchases: number; units: number };
+export type AlertsReportRow = { status: string; alert_handling_advisor_id: string | null; alerts: number; pending: number; expired: number; attended: number };
+export type SalesReport = { start_date: string | null; end_date: string | null; rows: SalesReportRow[] };
+export type AlertsReport = { start_date: string | null; end_date: string | null; rows: AlertsReportRow[] };
+export type ReportMetrics = { alerts_considered: number; contact_rate: number; repurchase_rate: number; average_days_between_purchases: number | null };
 
 type TokenResponse = { access_token: string };
 const tokenKey = "crm_access_token";
@@ -131,3 +137,28 @@ export function listAlerts(): Promise<Alert[]> { return request<Alert[]>("/api/v
 export function listAlertAttempts(alertId: string): Promise<AlertAttempt[]> { return request<AlertAttempt[]>(`/api/v1/alerts/${alertId}/attempts`); }
 export function createAlertAttempt(alertId: string, data: object): Promise<Alert> { return request<Alert>(`/api/v1/alerts/${alertId}/attempts`, { method: "POST", body: JSON.stringify(data) }); }
 export function generateAlerts(runDate?: string): Promise<{ created: number; pending: number; expired: number }> { return request(`/api/v1/alerts/generate${runDate ? `?run_date=${runDate}` : ""}`, { method: "POST" }); }
+export function transferPortfolio(customerId: string, assignedAdvisorId: string | null, reason: string): Promise<PortfolioTransferResult> { return request<PortfolioTransferResult>(`/api/v1/supervision/customers/${customerId}/transfer`, { method: "POST", body: JSON.stringify({ assigned_advisor_id: assignedAdvisorId, reason }) }); }
+export function listRecoveryAlerts(): Promise<Alert[]> { return request<Alert[]>("/api/v1/supervision/recovery-alerts"); }
+export function assignRecoveryAlert(alertId: string, assignedAdvisorId: string, reason: string): Promise<Alert> { return request<Alert>(`/api/v1/supervision/alerts/${alertId}/assign`, { method: "POST", body: JSON.stringify({ assigned_advisor_id: assignedAdvisorId, reason }) }); }
+
+function reportQuery(startDate?: string, endDate?: string): string {
+  const params = new URLSearchParams();
+  if (startDate) params.set("start_date", startDate);
+  if (endDate) params.set("end_date", endDate);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export function getSalesReport(startDate?: string, endDate?: string): Promise<SalesReport> { return request<SalesReport>(`/api/v1/reports/sales${reportQuery(startDate, endDate)}`); }
+export function getAlertsReport(startDate?: string, endDate?: string): Promise<AlertsReport> { return request<AlertsReport>(`/api/v1/reports/alerts${reportQuery(startDate, endDate)}`); }
+export function getReportMetrics(startDate?: string, endDate?: string): Promise<ReportMetrics> { return request<ReportMetrics>(`/api/v1/reports/metrics${reportQuery(startDate, endDate)}`); }
+export async function downloadReportCsv(type: "sales" | "alerts", startDate?: string, endDate?: string): Promise<void> {
+  const response = await fetch(`/api/v1/reports/${type}.csv${reportQuery(startDate, endDate)}`, { headers: { Authorization: `Bearer ${getToken()}` } });
+  if (!response.ok) throw new Error("No fue posible descargar el reporte");
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${type}_report.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
