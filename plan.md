@@ -2,6 +2,10 @@
 
 Este plan convierte la especificacion funcional en entregas tecnicas pequenas y verificables. Cada fase debe cerrar con pruebas automatizadas y una demostracion usando datos ficticios.
 
+## Estrategia actual: backend-first
+
+El frontend fue retirado intencionalmente para redefinirlo en una etapa posterior. Hasta nuevo acuerdo, cada fase se implementa, prueba, documenta y publica solo como API FastAPI, migraciones PostgreSQL, procesos operativos y pruebas automatizadas. La futura interfaz consumira estos contratos versionados; no se considera un entregable actual.
+
 ## Fase 0 - Definicion final
 
 **Objetivo:** cerrar los parametros operativos antes de programar reglas de negocio.

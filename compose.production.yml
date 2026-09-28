@@ -1,0 +1,31 @@
+# Deploy with: docker compose -f docker-compose.yml -f compose.production.yml --env-file .env.production up -d --build
+# Requires Docker Compose v2.24+ because !reset removes development port mappings.
+services:
+  db:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crm_fidelizacion}
+      POSTGRES_USER: ${POSTGRES_USER:-crm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the deployment environment}
+    ports: !reset []
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ${BACKUP_HOST_PATH:?Set BACKUP_HOST_PATH to an absolute persistent host directory}:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  backend:
+    env_file:
+      - ${APP_ENV_FILE:?Set APP_ENV_FILE to a protected application environment file}
+    ports: !reset []
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 45s
