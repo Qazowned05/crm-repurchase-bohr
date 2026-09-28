@@ -1,13 +1,215 @@
-import { useEffect, useState } from "react"
-import { CrudModal } from "../../components/CrudModal"
-import { api } from "../../services/api"
-import type { RecoveryAlert, RecoveryCustomer, TypificationTree, User } from "../../services/types"
-function options(nodes: TypificationTree[], depth = 0): Array<{ value: string; label: string }> { return nodes.flatMap(node => [{ value: node.id, label: `${"  ".repeat(depth)}${node.name} (${node.code})` }, ...options(node.children, depth + 1)]) }
-function overdue(date: string) { return Math.max(0, Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000)) }
+import { useEffect, useState } from "react";
+import { CrudModal } from "../../components/CrudModal";
+import { api } from "../../services/api";
+import type { RecoveryAlert, RecoveryCustomer, TypificationTree, User } from "../../services/types";
+function options(nodes: TypificationTree[], depth = 0): Array<{ value: string; label: string }> {
+  return nodes.flatMap((node) => [
+    { value: node.id, label: `${"  ".repeat(depth)}${node.name} (${node.code})` },
+    ...options(node.children, depth + 1),
+  ]);
+}
+function overdue(date: string) {
+  return Math.max(0, Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000));
+}
 export function RecoveryQueue() {
-  const [items, setItems] = useState<RecoveryCustomer[]>([]); const [advisors, setAdvisors] = useState<User[]>([]); const [tree, setTree] = useState<TypificationTree[]>([]); const [selected, setSelected] = useState<RecoveryAlert | null>(null); const [filters, setFilters] = useState({ typification_id: "", min_days_overdue: "", max_days_overdue: "" }); const [error, setError] = useState("")
-  const load = (active = filters) => { const query = new URLSearchParams(Object.entries(active).filter(([, value]) => value !== "")); return api<RecoveryCustomer[]>(`/supervision/recovery-queue${query.size ? `?${query}` : ""}`).then(setItems) }
-  useEffect(() => { load().catch(() => setError("No fue posible cargar la cola de recuperación.")); api<User[]>("/users").then(x => setAdvisors(x.filter(u => u.role === "ASESOR" && u.is_active))).catch(() => {}); api<TypificationTree[]>("/configuration/contact-typifications/tree").then(setTree).catch(() => {}) }, [])
-  const totalAlerts = items.reduce((total, customer) => total + customer.alerts.length, 0)
-  return <><div className="page-title"><div><p className="eyebrow">SUPERVISIÓN</p><h1>Cola de recuperación</h1><p>Prioriza clientes vencidos, revisa sus productos y asigna cada alerta al asesor adecuado.</p></div><div className="header-metric"><b>{totalAlerts}</b><span>alertas visibles</span></div></div><section className="panel filters"><div className="panel-heading"><div><h2>Filtros de priorización</h2><p>La tipificación incluye todas sus subtipificaciones.</p></div><button className="secondary" onClick={() => { const reset = { typification_id: "", min_days_overdue: "", max_days_overdue: "" }; setFilters(reset); load(reset).catch(() => setError("No fue posible actualizar la cola.")) }}>Limpiar</button></div><form onSubmit={event => { event.preventDefault(); setError(""); load().catch(reason => setError(reason instanceof Error ? reason.message : "No fue posible actualizar la cola.")) }}><div className="filter-grid"><label>Última tipificación<select value={filters.typification_id} onChange={event => setFilters(value => ({ ...value, typification_id: event.target.value }))}><option value="">Todas las tipificaciones</option>{options(tree).map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label>Días vencidos desde<input type="number" min="0" placeholder="Sin mínimo" value={filters.min_days_overdue} onChange={event => setFilters(value => ({ ...value, min_days_overdue: event.target.value }))} /></label><label>Días vencidos hasta<input type="number" min="0" placeholder="Sin máximo" value={filters.max_days_overdue} onChange={event => setFilters(value => ({ ...value, max_days_overdue: event.target.value }))} /></label><button>Aplicar filtros</button></div></form>{error && <p className="form-error">{error}</p>}</section><section className="recovery-list">{items.map(customer => <article className="panel recovery" key={customer.customer_id}><header><div className="customer-identity"><span className="avatar">{customer.first_names[0]}{customer.last_names[0]}</span><div><h2>{customer.first_names} {customer.last_names}</h2><p>DNI {customer.dni} <i /> {customer.phone}</p></div></div><span className="alert-count">{customer.alerts.length} {customer.alerts.length === 1 ? "alerta" : "alertas"}</span></header><div className="recovery-products">{customer.alerts.map(alert => <div className="recovery-item" key={alert.id}><div className="product-cell"><b>{alert.product_name}</b><span>{alert.product_code} <i /> Venta {alert.sale_date}</span></div><div className="contact-cell"><span className="label">Última gestión</span><b>{alert.latest_contact_typification || "Sin contacto registrado"}</b></div><div className="overdue-cell"><span className="label">Vencimiento</span><b className={overdue(alert.alert_date) > 0 ? "danger-text" : ""}>{overdue(alert.alert_date)} días</b><small>{alert.expected_repurchase_date}</small></div><span className="status warning">{alert.status.replaceAll("_", " ")}</span><button className="secondary" onClick={() => setSelected(alert)}>Reasignar</button></div>)}</div></article>)}{!items.length && <article className="panel empty-state">No hay alertas que coincidan con los filtros seleccionados.</article>}</section>{selected && <CrudModal title={`Reasignar: ${selected.product_name}`} onClose={() => setSelected(null)} fields={[{ name: "assigned_advisor_id", label: "Asesor responsable", required: true, options: [{ value: "", label: "Selecciona un asesor" }, ...advisors.map(advisor => ({ value: advisor.id, label: advisor.full_name }))] }, { name: "reason", label: "Motivo de la reasignación", required: true }]} onSave={async data => { await api(`/supervision/alerts/${selected.id}/assign`, { method: "POST", body: JSON.stringify(data) }); await load() }} />}</>
+  const [items, setItems] = useState<RecoveryCustomer[]>([]);
+  const [advisors, setAdvisors] = useState<User[]>([]);
+  const [tree, setTree] = useState<TypificationTree[]>([]);
+  const [selected, setSelected] = useState<RecoveryAlert | null>(null);
+  const [filters, setFilters] = useState({
+    typification_id: "",
+    min_days_overdue: "",
+    max_days_overdue: "",
+  });
+  const [error, setError] = useState("");
+  const load = (active = filters) => {
+    const query = new URLSearchParams(Object.entries(active).filter(([, value]) => value !== ""));
+    return api<RecoveryCustomer[]>(
+      `/supervision/recovery-queue${query.size ? `?${query}` : ""}`,
+    ).then(setItems);
+  };
+  useEffect(() => {
+    load().catch(() => setError("No fue posible cargar la cola de recuperación."));
+    api<User[]>("/users")
+      .then((x) => setAdvisors(x.filter((u) => u.role === "ASESOR" && u.is_active)))
+      .catch(() => {});
+    api<TypificationTree[]>("/configuration/contact-typifications/tree")
+      .then(setTree)
+      .catch(() => {});
+  }, []);
+  const totalAlerts = items.reduce((total, customer) => total + customer.alerts.length, 0);
+  return (
+    <>
+      <div className="page-title">
+        <div>
+          <p className="eyebrow">SUPERVISIÓN</p>
+          <h1>Cola de recuperación</h1>
+          <p>
+            Prioriza clientes vencidos, revisa sus productos y asigna cada alerta al asesor
+            adecuado.
+          </p>
+        </div>
+        <div className="header-metric">
+          <b>{totalAlerts}</b>
+          <span>alertas visibles</span>
+        </div>
+      </div>
+      <section className="panel filters">
+        <div className="panel-heading">
+          <div>
+            <h2>Filtros de priorización</h2>
+            <p>La tipificación incluye todas sus subtipificaciones.</p>
+          </div>
+          <button
+            className="secondary"
+            onClick={() => {
+              const reset = { typification_id: "", min_days_overdue: "", max_days_overdue: "" };
+              setFilters(reset);
+              load(reset).catch(() => setError("No fue posible actualizar la cola."));
+            }}
+          >
+            Limpiar
+          </button>
+        </div>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            setError("");
+            load().catch((reason) =>
+              setError(
+                reason instanceof Error ? reason.message : "No fue posible actualizar la cola.",
+              ),
+            );
+          }}
+        >
+          <div className="filter-grid">
+            <label>
+              Última tipificación
+              <select
+                value={filters.typification_id}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, typification_id: event.target.value }))
+                }
+              >
+                <option value="">Todas las tipificaciones</option>
+                {options(tree).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Días vencidos desde
+              <input
+                type="number"
+                min="0"
+                placeholder="Sin mínimo"
+                value={filters.min_days_overdue}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, min_days_overdue: event.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Días vencidos hasta
+              <input
+                type="number"
+                min="0"
+                placeholder="Sin máximo"
+                value={filters.max_days_overdue}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, max_days_overdue: event.target.value }))
+                }
+              />
+            </label>
+            <button>Aplicar filtros</button>
+          </div>
+        </form>
+        {error && <p className="form-error">{error}</p>}
+      </section>
+      <section className="recovery-list">
+        {items.map((customer) => (
+          <article className="panel recovery" key={customer.customer_id}>
+            <header>
+              <div className="customer-identity">
+                <span className="avatar">
+                  {customer.first_names[0]}
+                  {customer.last_names[0]}
+                </span>
+                <div>
+                  <h2>
+                    {customer.first_names} {customer.last_names}
+                  </h2>
+                  <p>
+                    DNI {customer.dni} <i /> {customer.phone}
+                  </p>
+                </div>
+              </div>
+              <span className="alert-count">
+                {customer.alerts.length} {customer.alerts.length === 1 ? "alerta" : "alertas"}
+              </span>
+            </header>
+            <div className="recovery-products">
+              {customer.alerts.map((alert) => (
+                <div className="recovery-item" key={alert.id}>
+                  <div className="product-cell">
+                    <b>{alert.product_name}</b>
+                    <span>
+                      {alert.product_code} <i /> Venta {alert.sale_date}
+                    </span>
+                  </div>
+                  <div className="contact-cell">
+                    <span className="label">Última gestión</span>
+                    <b>{alert.latest_contact_typification || "Sin contacto registrado"}</b>
+                  </div>
+                  <div className="overdue-cell">
+                    <span className="label">Vencimiento</span>
+                    <b className={overdue(alert.alert_date) > 0 ? "danger-text" : ""}>
+                      {overdue(alert.alert_date)} días
+                    </b>
+                    <small>{alert.expected_repurchase_date}</small>
+                  </div>
+                  <span className="status warning">{alert.status.replaceAll("_", " ")}</span>
+                  <button className="secondary" onClick={() => setSelected(alert)}>
+                    Reasignar
+                  </button>
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+        {!items.length && (
+          <article className="panel empty-state">
+            No hay alertas que coincidan con los filtros seleccionados.
+          </article>
+        )}
+      </section>
+      {selected && (
+        <CrudModal
+          title={`Reasignar: ${selected.product_name}`}
+          onClose={() => setSelected(null)}
+          fields={[
+            {
+              name: "assigned_advisor_id",
+              label: "Asesor responsable",
+              required: true,
+              options: [
+                { value: "", label: "Selecciona un asesor" },
+                ...advisors.map((advisor) => ({ value: advisor.id, label: advisor.full_name })),
+              ],
+            },
+            { name: "reason", label: "Motivo de la reasignación", required: true },
+          ]}
+          onSave={async (data) => {
+            await api(`/supervision/alerts/${selected.id}/assign`, {
+              method: "POST",
+              body: JSON.stringify(data),
+            });
+            await load();
+          }}
+        />
+      )}
+    </>
+  );
 }

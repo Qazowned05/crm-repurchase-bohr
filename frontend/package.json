@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{json,js,ts}\" \".prettierrc.json\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{json,js,ts}\" \".prettierrc.json\""
   },
   "dependencies": {
     "@vitejs/plugin-react-swc": "^4.3.3",
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "prettier": "^3.9.9",
     "typescript": "^6.0.3"
   }
 }
