@@ -1,7 +1,8 @@
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Date, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -38,6 +39,7 @@ class SaleItem(Base):
     sale_id: Mapped[str] = mapped_column(ForeignKey("sales.id", ondelete="RESTRICT"), index=True)
     product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), index=True)
     quantity: Mapped[int] = mapped_column()
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     rule_duration_days: Mapped[int] = mapped_column()
     rule_alert_days: Mapped[list[int]] = mapped_column(JSON)
     expected_repurchase_date: Mapped[date] = mapped_column(Date)

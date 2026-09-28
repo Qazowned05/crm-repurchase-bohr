@@ -103,14 +103,22 @@ function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => 
 }
 
 export function AlertRegister() {
-  const [data, setData] = useState<Paged<ManagedAlert>>({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 });
+  const [data, setData] = useState<Paged<ManagedAlert>>({
+    items: [],
+    page: 1,
+    page_size: PAGE_SIZE,
+    total: 0,
+    pages: 0,
+  });
   const [selected, setSelected] = useState<ManagedAlert | null>(null);
   const [filters, setFilters] = useState({ date_from: "", date_to: "", state: "" });
   const [error, setError] = useState("");
   const load = (page = data.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
-    return api<Paged<ManagedAlert> | ManagedAlert[]>(`/alerts/register?${query}`).then((value) => setData(asPaged(value, page)));
+    return api<Paged<ManagedAlert> | ManagedAlert[]>(`/alerts/register?${query}`).then((value) =>
+      setData(asPaged(value, page)),
+    );
   };
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar el registro de alertas."));
@@ -124,7 +132,7 @@ export function AlertRegister() {
           <p>Consulta alertas en seguimiento y alertas cerradas con su trazabilidad completa.</p>
         </div>
         <div className="header-metric">
-            <b>{data.total}</b>
+          <b>{data.total}</b>
           <span>alertas visibles</span>
         </div>
       </div>
@@ -217,7 +225,7 @@ export function AlertRegister() {
               </tr>
             </thead>
             <tbody>
-               {data.items.map((alert) => {
+              {data.items.map((alert) => {
                 const latest = latestAttempt(alert);
                 const closed = closedStatuses.has(alert.status);
                 return (
@@ -282,7 +290,12 @@ export function AlertRegister() {
             No hay alertas que coincidan con los filtros seleccionados.
           </div>
         )}
-        <Pagination data={data} onPageChange={(page) => load(page).catch(() => setError("No fue posible cargar la página."))} />
+        <Pagination
+          data={data}
+          onPageChange={(page) =>
+            load(page).catch(() => setError("No fue posible cargar la página."))
+          }
+        />
       </section>
       {selected && <AlertDetails alert={selected} onClose={() => setSelected(null)} />}
     </>

@@ -1,5 +1,8 @@
 from datetime import date, datetime
-from pydantic import BaseModel, Field
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class ContactAttemptCreate(BaseModel):
@@ -9,6 +12,30 @@ class ContactAttemptCreate(BaseModel):
     note: str | None = Field(default=None, max_length=4000)
     next_action_date: date | None = None
     close_alert: bool = False
+
+
+class RepurchaseItemCreate(BaseModel):
+    product_id: str
+    quantity: int = Field(gt=0, le=100000)
+    unit_price: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+
+
+class AlertRepurchaseCreate(BaseModel):
+    sale_date: date = Field(default_factory=date.today)
+    notes: str | None = Field(default=None, max_length=4000)
+    acquisition_channel: Literal["TV", "DIGITAL", "OTROS"] | None = None
+    acquisition_channel_detail: str | None = Field(default=None, max_length=255)
+    items: list[RepurchaseItemCreate] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_sale(self) -> "AlertRepurchaseCreate":
+        if len({item.product_id for item in self.items}) != len(self.items):
+            raise ValueError("A product may only appear once per sale")
+        if self.acquisition_channel == "OTROS" and not (self.acquisition_channel_detail or "").strip():
+            raise ValueError("Acquisition channel detail is required for OTROS")
+        if self.acquisition_channel != "OTROS" and self.acquisition_channel_detail is not None:
+            raise ValueError("Acquisition channel detail is only allowed for OTROS")
+        return self
 
 class AlertResponse(BaseModel):
     id: str

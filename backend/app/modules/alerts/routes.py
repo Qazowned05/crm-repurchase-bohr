@@ -1,7 +1,8 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import case, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -9,11 +10,16 @@ from app.core.database import get_db
 from app.core.pagination import paginate_items
 from app.dependencies import get_current_user
 from app.modules.alerts.models import Alert, AlertContactAttempt
-from app.modules.alerts.schemas import AlertResponse, ContactAttemptCreate, ContactAttemptResponse, ManagedAlertResponse
+from app.modules.alerts.schemas import AlertRepurchaseCreate, AlertResponse, ContactAttemptCreate, ContactAttemptResponse, ManagedAlertResponse
 from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, alert_response, contact_attempt_response, managed_alert_response, run_alert_generation
 from app.modules.alerts.service import advisor_visible_alerts_query
 from app.modules.auth.models import User
 from app.modules.configuration.models import ContactTypification
+from app.modules.customers.models import Customer
+from app.modules.products.models import Product
+from app.modules.sales.models import Sale, SaleItem
+from app.modules.sales.routes import recompute_chain, rule_for, sale_response
+from app.modules.sales.schemas import SaleResponse
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
 
@@ -28,6 +34,86 @@ def alert_or_404(alert_id: str, db: Session) -> Alert:
 def assert_alert_access(alert: Alert, user: User) -> None:
     if user.role == "ASESOR" and alert.assigned_advisor_id != user.id:
         raise HTTPException(status_code=403, detail="You can only manage your assigned alerts")
+
+
+@router.post("/{alert_id}/repurchase", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
+def register_repurchase(
+    alert_id: str,
+    payload: AlertRepurchaseCreate,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    # Locking the alert serializes repurchase registration; the unique sale link is a second guard.
+    alert = db.scalar(select(Alert).where(Alert.id == alert_id).with_for_update())
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    assert_alert_access(alert, current_user)
+
+    linked_sale = db.scalar(select(Sale).where(Sale.source_alert_id == alert.id))
+    if linked_sale is not None:
+        response.status_code = status.HTTP_200_OK
+        return sale_response(linked_sale, db)
+    if alert.status in FINAL_STATUSES:
+        raise HTTPException(status_code=409, detail="A final alert cannot register a repurchase")
+
+    source_item = db.get(SaleItem, alert.sale_item_id)
+    source_sale = db.get(Sale, source_item.sale_id) if source_item else None
+    customer = db.get(Customer, source_sale.customer_id) if source_sale else None
+    if source_item is None or source_sale is None or customer is None or customer.status != "ACTIVO":
+        raise HTTPException(status_code=422, detail="Alert source must belong to an active customer")
+    if payload.sale_date < source_sale.sale_date:
+        raise HTTPException(status_code=422, detail="Repurchase date cannot precede the original sale")
+
+    products = {item.product_id: db.get(Product, item.product_id) for item in payload.items}
+    if any(product is None or not product.is_active for product in products.values()):
+        raise HTTPException(status_code=422, detail="All products must exist and be active")
+    rules = {product_id: rule_for(product_id, payload.sale_date, db) for product_id in products}
+    if any(rule is None for rule in rules.values()):
+        raise HTTPException(status_code=422, detail="Each product needs an effective repurchase rule on the sale date")
+
+    advisor_id = current_user.id if current_user.role == "ASESOR" else (alert.assigned_advisor_id or current_user.id)
+    sale = Sale(
+        customer_id=customer.id,
+        advisor_id=advisor_id,
+        sale_date=payload.sale_date,
+        notes=payload.notes.strip() if payload.notes else None,
+        acquisition_channel=payload.acquisition_channel.strip().upper() if payload.acquisition_channel else None,
+        acquisition_channel_detail=payload.acquisition_channel_detail.strip() if payload.acquisition_channel_detail else None,
+        source_alert_id=alert.id,
+    )
+    try:
+        with db.begin_nested():
+            db.add(sale)
+            db.flush()
+    except IntegrityError:
+        # The unique source-alert link also protects this endpoint from writers that do not lock alerts.
+        linked_sale = db.scalar(select(Sale).where(Sale.source_alert_id == alert.id))
+        if linked_sale is None:
+            raise
+        response.status_code = status.HTTP_200_OK
+        return sale_response(linked_sale, db)
+    for payload_item in payload.items:
+        rule = rules[payload_item.product_id]
+        db.add(SaleItem(
+            sale_id=sale.id,
+            product_id=payload_item.product_id,
+            quantity=payload_item.quantity,
+            unit_price=payload_item.unit_price,
+            rule_duration_days=rule.duration_days,
+            rule_alert_days=rule.alert_days,
+            expected_repurchase_date=payload.sale_date + timedelta(days=rule.duration_days),
+        ))
+    db.flush()
+    product_ids = set(products)
+    recompute_chain(customer.id, product_ids, db)
+    alert.status = "RECOMPRA_LOGRADA"
+    alert.closed_at = datetime.now(timezone.utc)
+    alert.closure_reason = f"RECOMPRA_CONFIRMADA: venta {sale.id}"
+    record_audit(db, actor_id=current_user.id, entity_type="alert", entity_id=alert.id, action="REPURCHASE_ACHIEVED", after={"status": alert.status, "closure_reason": alert.closure_reason, "repurchase_sale_id": sale.id})
+    record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="CONFIRMED", after={"status": sale.status, "customer_id": customer.id, "source_alert_id": alert.id})
+    db.commit()
+    return sale_response(sale, db)
 
 
 @router.get("/inbox")

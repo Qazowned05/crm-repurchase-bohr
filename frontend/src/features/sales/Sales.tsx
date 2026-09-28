@@ -4,7 +4,14 @@ import { ConfirmModal, Modal } from "../../components/Modal";
 import { api } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
-import type { AdvisorSalesMetrics, Customer, Paged, Product, Sale, User } from "../../services/types";
+import type {
+  AdvisorSalesMetrics,
+  Customer,
+  Paged,
+  Product,
+  Sale,
+  User,
+} from "../../services/types";
 
 type SaleLine = { product_id: string; quantity: number };
 
@@ -22,7 +29,13 @@ const customerFields = [
 export function Sales({ user }: { user: User }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [salesPage, setSalesPage] = useState<Paged<Sale>>({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 });
+  const [salesPage, setSalesPage] = useState<Paged<Sale>>({
+    items: [],
+    page: 1,
+    page_size: PAGE_SIZE,
+    total: 0,
+    pages: 0,
+  });
   const [metrics, setMetrics] = useState<AdvisorSalesMetrics | null>(null);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Sale | null>(null);
@@ -35,14 +48,14 @@ export function Sales({ user }: { user: User }) {
   const advisor = user.role === "ASESOR";
   const load = async (page = salesPage.page) => {
     const [customerRows, productRows, saleRows, advisorMetrics] = await Promise.all([
-       api<Paged<Customer> | Customer[]>("/customers?page=1&page_size=200"),
-       api<Paged<Product> | Product[]>("/products?page=1&page_size=200"),
-       api<Paged<Sale> | Sale[]>(`/sales?page=${page}&page_size=${PAGE_SIZE}`),
+      api<Paged<Customer> | Customer[]>("/customers?page=1&page_size=200"),
+      api<Paged<Product> | Product[]>("/products?page=1&page_size=200"),
+      api<Paged<Sale> | Sale[]>(`/sales?page=${page}&page_size=${PAGE_SIZE}`),
       advisor ? api<AdvisorSalesMetrics>("/sales/me/metrics") : Promise.resolve(null),
     ]);
-     setCustomers(asPaged(customerRows).items);
-     setProducts(asPaged(productRows).items.filter((product) => product.is_active));
-     setSalesPage(asPaged(saleRows, page));
+    setCustomers(asPaged(customerRows).items);
+    setProducts(asPaged(productRows).items.filter((product) => product.is_active));
+    setSalesPage(asPaged(saleRows, page));
     setMetrics(advisorMetrics);
   };
   const sales = salesPage.items;
@@ -159,7 +172,7 @@ export function Sales({ user }: { user: User }) {
             </p>
           </div>
           <span className="header-metric">
-             <b>{salesPage.total}</b> registros
+            <b>{salesPage.total}</b> registros
           </span>
         </div>
         <div className="table-wrap">
@@ -234,7 +247,12 @@ export function Sales({ user }: { user: User }) {
             </tbody>
           </table>
         </div>
-        <Pagination data={salesPage} onPageChange={(page) => load(page).catch(() => setError("No fue posible cargar la página."))} />
+        <Pagination
+          data={salesPage}
+          onPageChange={(page) =>
+            load(page).catch(() => setError("No fue posible cargar la página."))
+          }
+        />
       </section>
       {open && (
         <Modal title={editing ? "Editar venta" : "Registrar venta"} onClose={closeSale}>

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -69,6 +70,7 @@ class SaleItemResponse(BaseModel):
     id: str
     product_id: str
     quantity: int
+    unit_price: Decimal | None
     rule_duration_days: int
     rule_alert_days: list[int]
     expected_repurchase_date: date

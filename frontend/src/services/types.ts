@@ -1,5 +1,11 @@
 export type Role = "ASESOR" | "SUPERVISOR" | "ADMIN";
-export type Paged<T> = { items: T[]; page: number; page_size: number; total: number; pages: number };
+export type Paged<T> = {
+  items: T[];
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+};
 export type User = { id: string; email: string; full_name: string; role: Role; is_active: boolean };
 export type Customer = {
   id: string;
@@ -31,6 +37,18 @@ export type Product = {
   brand_name: string;
   category_name: string;
   is_active: boolean;
+};
+export type RepurchaseItem = {
+  product_id: string;
+  quantity: number;
+  unit_price: number;
+};
+export type AlertRepurchaseCreate = {
+  sale_date?: string;
+  notes?: string;
+  acquisition_channel?: "TV" | "DIGITAL" | "OTROS";
+  acquisition_channel_detail?: string;
+  items: RepurchaseItem[];
 };
 export type ProductRepurchaseRule = {
   id: string;
@@ -120,6 +138,7 @@ export type SaleItem = {
   id: string;
   product_id: string;
   quantity: number;
+  unit_price?: string | null;
   purchase_type?: string | null;
   product_code?: string | null;
   product_name?: string | null;

@@ -8,7 +8,8 @@ import type {
   Customer,
   Product,
   ProductRepurchaseRule,
-  Paged, User,
+  Paged,
+  User,
 } from "../../services/types";
 type Kind = "customers" | "products" | "users";
 const definitions = {
@@ -46,7 +47,13 @@ const definitions = {
   },
 } as const;
 export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
-  const [data, setData] = useState<Paged<Customer | Product | User>>({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 });
+  const [data, setData] = useState<Paged<Customer | Product | User>>({
+    items: [],
+    page: 1,
+    page_size: PAGE_SIZE,
+    total: 0,
+    pages: 0,
+  });
   const [editing, setEditing] = useState<Customer | Product | User | null | undefined>(undefined);
   const [creatingProduct, setCreatingProduct] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -56,7 +63,9 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
   const load = (page = data.page) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     if (kind === "products") query.set("include_inactive", "true");
-    return api<Paged<Customer | Product | User> | Array<Customer | Product | User>>(`/${kind}?${query}`).then((value) => setData(asPaged(value, page)));
+    return api<Paged<Customer | Product | User> | Array<Customer | Product | User>>(
+      `/${kind}?${query}`,
+    ).then((value) => setData(asPaged(value, page)));
   };
   useEffect(() => {
     load().catch(() => setData({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 }));
@@ -263,7 +272,10 @@ function ProductCreateModal({
   const [brands, setBrands] = useState<CatalogItem[]>([]);
   const [categories, setCategories] = useState<CatalogItem[]>([]);
   useEffect(() => {
-    Promise.all([api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"), api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200")])
+    Promise.all([
+      api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"),
+      api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200"),
+    ])
       .then(([brandRows, categoryRows]) => {
         setBrands(asPaged(brandRows).items);
         setCategories(asPaged(categoryRows).items);
@@ -373,7 +385,10 @@ function ProductEditModal({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    Promise.all([api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"), api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200")])
+    Promise.all([
+      api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"),
+      api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200"),
+    ])
       .then(([brandRows, categoryRows]) => {
         setBrands(asPaged(brandRows).items);
         setCategories(asPaged(categoryRows).items);
@@ -468,7 +483,9 @@ function CatalogModal({
   const [deleting, setDeleting] = useState<CatalogItem | null>(null);
   const [error, setError] = useState("");
   const load = () =>
-    api<Paged<CatalogItem> | CatalogItem[]>(`/${endpoint}?include_inactive=true&page=1&page_size=200`)
+    api<Paged<CatalogItem> | CatalogItem[]>(
+      `/${endpoint}?include_inactive=true&page=1&page_size=200`,
+    )
       .then((value) => setItems(asPaged(value).items))
       .catch(() => setError(`No fue posible cargar ${title.toLowerCase()}.`));
   useEffect(() => {

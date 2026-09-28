@@ -7,6 +7,7 @@ from app.core.security import hash_password
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.audit.models import AuditLog
 from app.modules.auth.models import User
+from app.modules.sales.models import Sale
 
 
 def make_user(db: Session, email: str, role: str, active: bool = True) -> User:
@@ -31,6 +32,17 @@ def setup_sale(client: TestClient, db: Session, sale_date: date, duration: int =
     assert client.post(f"/api/v1/products/{product['id']}/rules", headers=supervisor_auth, json={"duration_days": duration, "alert_days": [15, 5], "effective_from": "2020-01-01"}).status_code == 201
     sale = client.post("/api/v1/sales", headers=advisor_auth, json={"customer_id": customer["id"], "sale_date": str(sale_date), "acquisition_channel": "TV", "items": [{"product_id": product["id"], "quantity": 1}]}).json()
     return sale, product, supervisor_auth, advisor
+
+
+def add_product_with_rule(client: TestClient, supervisor_auth: dict[str, str], original: dict, suffix: str, duration: int) -> dict:
+    product = client.post("/api/v1/products", headers=supervisor_auth, json={
+        "code": f"EXTRA-{suffix}", "name": f"Producto extra {suffix}",
+        "brand_id": original["brand_id"], "category_id": original["category_id"],
+    }).json()
+    assert client.post(f"/api/v1/products/{product['id']}/rules", headers=supervisor_auth, json={
+        "duration_days": duration, "alert_days": [10, 3], "effective_from": "2020-01-01",
+    }).status_code == 201
+    return product
 
 
 def test_automatic_generation_is_idempotent_and_uses_due_date(client: TestClient, db: Session) -> None:
@@ -125,3 +137,68 @@ def test_managed_register_keeps_follow_up_and_closed_alert_history(client: TestC
     assert client.get("/api/v1/alerts/register?state=open-follow-up", headers=advisor_auth).json() == []
     assert len(client.get("/api/v1/alerts/register?state=closed", headers=supervisor_auth).json()) == 1
     assert client.get("/api/v1/alerts/register?date_from=2030-01-02&date_to=2030-01-01", headers=supervisor_auth).status_code == 422
+
+
+def test_managed_repurchase_with_different_product_closes_source_alert(client: TestClient, db: Session) -> None:
+    sale, original, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="different")
+    extra = add_product_with_rule(client, supervisor_auth, original, "different", 45)
+    alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
+
+    response = client.post(f"/api/v1/alerts/{alert['id']}/repurchase", headers=auth(client, advisor.email), json={
+        "items": [{"product_id": extra["id"], "quantity": 2, "unit_price": "19.90"}],
+    })
+
+    assert response.status_code == 201
+    registered = response.json()
+    assert registered["source_alert_id"] == alert["id"]
+    assert registered["advisor_id"] == advisor.id
+    item = registered["items"][0]
+    assert item["product_id"] == extra["id"]
+    assert item["quantity"] == 2
+    assert item["unit_price"] == "19.90"
+    assert item["purchase_type"] == "COMPRA"
+    assert item["expected_repurchase_date"] == str(date.today() + timedelta(days=45))
+    source = db.get(Alert, alert["id"])
+    assert source.status == "RECOMPRA_LOGRADA"
+    assert source.closure_reason == f"RECOMPRA_CONFIRMADA: venta {registered['id']}"
+    assert sale["items"][0]["product_id"] != registered["items"][0]["product_id"]
+
+
+def test_managed_repurchase_marks_only_included_original_product_as_repurchase(client: TestClient, db: Session) -> None:
+    _, original, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="mixed")
+    extra = add_product_with_rule(client, supervisor_auth, original, "mixed", 20)
+    alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
+
+    response = client.post(f"/api/v1/alerts/{alert['id']}/repurchase", headers=auth(client, advisor.email), json={
+        "sale_date": str(date.today()),
+        "notes": "Cliente recompra y agrega producto",
+        "items": [
+            {"product_id": original["id"], "quantity": 1, "unit_price": "30.00"},
+            {"product_id": extra["id"], "quantity": 3, "unit_price": "12.50"},
+        ],
+    })
+
+    assert response.status_code == 201
+    items = {item["product_id"]: item for item in response.json()["items"]}
+    assert items[original["id"]]["purchase_type"] == "RECOMPRA"
+    assert items[extra["id"]]["purchase_type"] == "COMPRA"
+    assert items[original["id"]]["expected_repurchase_date"] == str(date.today() + timedelta(days=30))
+    assert items[extra["id"]]["expected_repurchase_date"] == str(date.today() + timedelta(days=20))
+
+
+def test_managed_repurchase_requires_assignment_and_is_idempotent(client: TestClient, db: Session) -> None:
+    _, original, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="retry")
+    alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
+    other = make_user(db, "other-alert@example.com", "ASESOR")
+    payload = {"items": [{"product_id": original["id"], "quantity": 1, "unit_price": "22.00"}]}
+
+    assert client.post(f"/api/v1/alerts/{alert['id']}/repurchase", headers=auth(client, other.email), json=payload).status_code == 403
+    first = client.post(f"/api/v1/alerts/{alert['id']}/repurchase", headers=supervisor_auth, json=payload)
+    retry = client.post(f"/api/v1/alerts/{alert['id']}/repurchase", headers=auth(client, advisor.email), json=payload)
+
+    assert first.status_code == 201
+    assert first.json()["advisor_id"] == advisor.id
+    assert retry.status_code == 200
+    assert retry.json()["id"] == first.json()["id"]
+    assert db.query(Alert).filter_by(id=alert["id"], status="RECOMPRA_LOGRADA").count() == 1
+    assert db.query(Sale).filter_by(source_alert_id=alert["id"]).count() == 1
