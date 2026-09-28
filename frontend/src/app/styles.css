@@ -344,6 +344,12 @@ td {
   padding: 12px 10px;
   white-space: nowrap;
 }
+.table-detail {
+  display: block;
+  margin-top: 3px;
+  color: #718596;
+  font-size: 11px;
+}
 td {
   border-bottom: 1px solid #dce5ec;
   color: #29475e;
@@ -495,6 +501,37 @@ form footer,
   border: 1px solid #dce5ec;
   padding: 10px;
   font-size: 13px;
+}
+button.alert-row {
+  width: 100%;
+  border-color: #dce5ec;
+  background: #fff;
+  color: #29475e;
+  text-align: left;
+  font-weight: 400;
+}
+button.alert-row:hover {
+  border-color: #9db5c8;
+  background: #f0f6fa;
+}
+.alert-row b,
+.alert-row small {
+  display: block;
+}
+.alert-row small {
+  margin-top: 3px;
+  color: #718596;
+}
+.alert-detail {
+  margin-bottom: 20px;
+  border-left: 3px solid #005a9c;
+  background: #f4f8fb;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.alert-detail p {
+  margin: 4px 0;
+  color: #29475e;
 }
 
 .tree-panel {

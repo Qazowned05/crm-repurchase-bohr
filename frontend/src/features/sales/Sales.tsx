@@ -1,15 +1,9 @@
 import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
-import { Modal } from "../../components/Modal";
+import { ConfirmModal, Modal } from "../../components/Modal";
 import { api } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
-import type {
-  AdvisorSalesMetrics,
-  Customer,
-  Product,
-  Sale,
-  User,
-} from "../../services/types";
+import type { AdvisorSalesMetrics, Customer, Product, Sale, User } from "../../services/types";
 
 type SaleLine = { product_id: string; quantity: number };
 
@@ -30,6 +24,8 @@ export function Sales({ user }: { user: User }) {
   const [sales, setSales] = useState<Sale[]>([]);
   const [metrics, setMetrics] = useState<AdvisorSalesMetrics | null>(null);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Sale | null>(null);
+  const [removing, setRemoving] = useState<Sale | null>(null);
   const [customerModal, setCustomerModal] = useState(false);
   const [customerId, setCustomerId] = useState("");
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
@@ -53,6 +49,7 @@ export function Sales({ user }: { user: User }) {
   }, []);
   const closeSale = () => {
     setOpen(false);
+    setEditing(null);
     setError("");
   };
   const saveCustomer = async (data: Record<string, unknown>) => {
@@ -72,17 +69,18 @@ export function Sales({ user }: { user: User }) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      await api("/sales", {
-        method: "POST",
-        body: JSON.stringify({
-          customer_id: customerId,
-          sale_date: form.get("sale_date"),
-          notes: form.get("notes") || undefined,
-          acquisition_channel: channel,
-          acquisition_channel_detail:
-            channel === "OTROS" ? form.get("acquisition_channel_detail") : undefined,
-          items: lines,
-        }),
+      const payload = {
+        customer_id: customerId,
+        sale_date: form.get("sale_date"),
+        notes: form.get("notes") || null,
+        acquisition_channel: channel,
+        acquisition_channel_detail:
+          channel === "OTROS" ? form.get("acquisition_channel_detail") : null,
+        items: lines,
+      };
+      await api(editing ? `/sales/${editing.id}` : "/sales", {
+        method: editing ? "PATCH" : "POST",
+        body: JSON.stringify(payload),
       });
       closeSale();
       setLines([{ product_id: "", quantity: 1 }]);
@@ -90,10 +88,13 @@ export function Sales({ user }: { user: User }) {
         setError("La venta se registró, pero no fue posible actualizar el historial."),
       );
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "No fue posible registrar la venta.");
+      setError(reason instanceof Error ? reason.message : "No fue posible guardar la venta.");
     }
   };
-  const customerName = (customerId: string) => {
+  const customerName = (sale: Sale) => {
+    if (sale.customer_first_names || sale.customer_last_names)
+      return `${sale.customer_last_names || ""} ${sale.customer_first_names || ""}`.trim();
+    const customerId = sale.customer_id;
     const customer = customers.find((row) => row.id === customerId);
     return customer ? `${customer.last_names} ${customer.first_names}` : customerId;
   };
@@ -101,7 +102,8 @@ export function Sales({ user }: { user: User }) {
     sale.items
       .map((item) => {
         const product = products.find((row) => row.id === item.product_id);
-        return `${product ? product.name : item.product_id} x${item.quantity}`;
+        const detail = [item.product_brand, item.product_category].filter(Boolean).join(" / ");
+        return `${item.product_name || product?.name || item.product_id}${detail ? ` (${detail})` : ""} x${item.quantity}`;
       })
       .join(", ");
   return (
@@ -119,6 +121,9 @@ export function Sales({ user }: { user: User }) {
         <button
           onClick={() => {
             setError("");
+            setCustomerId("");
+            setLines([{ product_id: "", quantity: 1 }]);
+            setChannel("TV");
             setOpen(true);
           }}
         >
@@ -160,16 +165,28 @@ export function Sales({ user }: { user: User }) {
             <thead>
               <tr>
                 <th>Fecha</th>
+                {!advisor && <th>Vendedor / asesor</th>}
                 <th>Cliente</th>
                 <th>Productos</th>
                 <th>Estado</th>
+                {!advisor && <th aria-label="Acciones" />}
               </tr>
             </thead>
             <tbody>
               {sales.map((sale) => (
                 <tr key={sale.id}>
                   <td>{sale.sale_date}</td>
-                  <td>{customerName(sale.customer_id)}</td>
+                  {!advisor && <td>{sale.advisor_full_name || sale.advisor_id}</td>}
+                  <td>
+                    {customerName(sale)}
+                    {(sale.customer_dni || sale.customer_phone) && (
+                      <small className="table-detail">
+                        {[sale.customer_dni && `DNI ${sale.customer_dni}`, sale.customer_phone]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </small>
+                    )}
+                  </td>
                   <td>{saleProducts(sale)}</td>
                   <td>
                     <span
@@ -178,11 +195,38 @@ export function Sales({ user }: { user: User }) {
                       {sale.status.replaceAll("_", " ")}
                     </span>
                   </td>
+                  {!advisor && (
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="link"
+                          onClick={() => {
+                            setError("");
+                            setCustomerId(sale.customer_id);
+                            setLines(
+                              sale.items.map((item) => ({
+                                product_id: item.product_id,
+                                quantity: item.quantity,
+                              })),
+                            );
+                            setChannel(sale.acquisition_channel || "TV");
+                            setEditing(sale);
+                            setOpen(true);
+                          }}
+                        >
+                          Editar
+                        </button>
+                        <button className="link danger-link" onClick={() => setRemoving(sale)}>
+                          Eliminar
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
               {!sales.length && (
                 <tr>
-                  <td colSpan={4}>No hay ventas registradas.</td>
+                  <td colSpan={advisor ? 4 : 6}>No hay ventas registradas.</td>
                 </tr>
               )}
             </tbody>
@@ -190,7 +234,7 @@ export function Sales({ user }: { user: User }) {
         </div>
       </section>
       {open && (
-        <Modal title="Registrar venta" onClose={closeSale}>
+        <Modal title={editing ? "Editar venta" : "Registrar venta"} onClose={closeSale}>
           <form onSubmit={submit}>
             <div className="form-grid">
               <label>
@@ -218,7 +262,7 @@ export function Sales({ user }: { user: User }) {
                 <input
                   name="sale_date"
                   type="date"
-                  defaultValue={new Date().toISOString().slice(0, 10)}
+                  defaultValue={editing?.sale_date || new Date().toISOString().slice(0, 10)}
                   required
                 />
               </label>
@@ -233,7 +277,11 @@ export function Sales({ user }: { user: User }) {
               {channel === "OTROS" && (
                 <label>
                   Detalle del canal
-                  <input name="acquisition_channel_detail" required />
+                  <input
+                    name="acquisition_channel_detail"
+                    defaultValue={editing?.acquisition_channel_detail || ""}
+                    required
+                  />
                 </label>
               )}
             </div>
@@ -298,7 +346,7 @@ export function Sales({ user }: { user: User }) {
             </div>
             <label className="notes">
               Notas opcionales
-              <textarea name="notes" maxLength={4000} />
+              <textarea name="notes" defaultValue={editing?.notes || ""} maxLength={4000} />
             </label>
             {error && <p className="form-error">{error}</p>}
             <footer>
@@ -316,6 +364,17 @@ export function Sales({ user }: { user: User }) {
           fields={customerFields}
           onClose={() => setCustomerModal(false)}
           onSave={saveCustomer}
+        />
+      )}
+      {removing && (
+        <ConfirmModal
+          title="Eliminar venta permanentemente"
+          message={`Eliminarás de forma permanente la venta de ${customerName(removing)} del ${removing.sale_date}, sus productos y alertas relacionadas. Esta acción no se puede deshacer.`}
+          onClose={() => setRemoving(null)}
+          onConfirm={async () => {
+            await api(`/sales/${removing.id}`, { method: "DELETE" });
+            await load();
+          }}
         />
       )}
     </>

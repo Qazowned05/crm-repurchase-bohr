@@ -12,9 +12,10 @@ from app.modules.alerts.models import Alert
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
 from app.modules.configuration.models import AlertOperationalSettings
+from app.modules.products.models import Product
 from app.modules.sales.models import Sale, SaleItem
 
-FINAL_STATUSES = {"RECOMPRA_LOGRADA", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CANCELADO_POR_ANULACION", "VENCIDO_NO_GESTIONADO"}
+FINAL_STATUSES = {"RECOMPRA_LOGRADA", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CANCELADO_POR_ANULACION", "CERRADO_POR_TIPIFICACION", "VENCIDO_NO_GESTIONADO"}
 RECOVERABLE_FINAL_STATUSES = {"VENCIDO_NO_GESTIONADO"}
 logger = logging.getLogger(__name__)
 _generation_lock = Lock()
@@ -24,6 +25,24 @@ _scheduler_thread: Thread | None = None
 
 def active_alerts_query():
     return select(Alert).where(Alert.status.not_in(FINAL_STATUSES))
+
+
+def alert_response(alert: Alert, db: Session) -> dict:
+    item = db.get(SaleItem, alert.sale_item_id)
+    sale = db.get(Sale, item.sale_id) if item else None
+    customer = db.get(Customer, sale.customer_id) if sale else None
+    product = db.get(Product, item.product_id) if item else None
+    advisor = db.get(User, sale.advisor_id) if sale else None
+    return {
+        **{column.name: getattr(alert, column.name) for column in Alert.__table__.columns},
+        "customer_id": customer.id if customer else None, "customer_dni": customer.dni if customer else None,
+        "customer_first_names": customer.first_names if customer else None, "customer_last_names": customer.last_names if customer else None,
+        "customer_phone": customer.phone if customer else None, "customer_email": customer.email if customer else None,
+        "product_id": product.id if product else None, "product_code": product.code if product else None,
+        "product_name": product.name if product else None, "original_sale_id": sale.id if sale else None,
+        "original_sale_date": sale.sale_date if sale else None, "seller_advisor_id": advisor.id if advisor else None,
+        "seller_advisor_name": advisor.full_name if advisor else None, "seller_advisor_email": advisor.email if advisor else None,
+    }
 
 
 def alert_settings(db: Session) -> AlertOperationalSettings:

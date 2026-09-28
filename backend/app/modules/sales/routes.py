@@ -1,7 +1,8 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, select
+from fastapi.encoders import jsonable_encoder
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -11,7 +12,7 @@ from app.modules.auth.models import User
 from app.modules.customers.models import Customer
 from app.modules.products.models import Product, ProductRepurchaseRule
 from app.modules.sales.models import Sale, SaleDuplicateReview, SaleItem
-from app.modules.sales.schemas import AdvisorSalesMetricsResponse, AnnulSaleCreate, DuplicateReviewCreate, SaleCreate, SaleResponse
+from app.modules.sales.schemas import AdvisorSalesMetricsResponse, AnnulSaleCreate, DuplicateReviewCreate, SaleCreate, SaleResponse, SaleUpdate
 from app.modules.alerts.service import close_alerts_for_annulment, close_alerts_for_repurchase
 from app.modules.alerts.models import Alert
 
@@ -20,8 +21,43 @@ router = APIRouter(prefix="/api/v1/sales", tags=["sales"])
 
 def sale_response(sale: Sale, db: Session) -> dict:
     data = {column.name: getattr(sale, column.name) for column in Sale.__table__.columns}
-    data["items"] = list(db.scalars(select(SaleItem).where(SaleItem.sale_id == sale.id).order_by(SaleItem.created_at)))
+    customer = db.get(Customer, sale.customer_id)
+    advisor = db.get(User, sale.advisor_id)
+    data.update({
+        "customer_dni": customer.dni if customer else None, "customer_first_names": customer.first_names if customer else None,
+        "customer_last_names": customer.last_names if customer else None, "customer_phone": customer.phone if customer else None,
+        "customer_email": customer.email if customer else None, "advisor_full_name": advisor.full_name if advisor else None,
+        "advisor_email": advisor.email if advisor else None,
+    })
+    items = []
+    for item in db.scalars(select(SaleItem).where(SaleItem.sale_id == sale.id).order_by(SaleItem.created_at)):
+        product = db.get(Product, item.product_id)
+        items.append({
+            **{column.name: getattr(item, column.name) for column in SaleItem.__table__.columns},
+            "product_code": product.code if product else None, "product_name": product.name if product else None,
+            "product_brand": product.brand.name if product else None, "product_category": product.category.name if product else None,
+        })
+    data["items"] = items
     return data
+
+
+def remove_sale_items_and_alerts(sale_id: str, db: Session) -> None:
+    """Remove records that reference sale items before a hard sale mutation."""
+    from app.modules.alerts.models import AlertContactAttempt
+    from app.modules.supervision.models import AlertAssignmentHistory
+
+    item_ids = list(db.scalars(select(SaleItem.id).where(SaleItem.sale_id == sale_id)))
+    if not item_ids:
+        return
+    alert_ids = list(db.scalars(select(Alert.id).where(Alert.sale_item_id.in_(item_ids))))
+    if alert_ids:
+        # A later sale may retain a nullable link to the originating alert.
+        db.execute(update(Sale).where(Sale.source_alert_id.in_(alert_ids)).values(source_alert_id=None))
+        db.execute(delete(AlertAssignmentHistory).where(AlertAssignmentHistory.alert_id.in_(alert_ids)))
+        db.execute(delete(AlertContactAttempt).where(AlertContactAttempt.alert_id.in_(alert_ids)))
+        db.execute(delete(Alert).where(Alert.id.in_(alert_ids)))
+    db.execute(update(SaleItem).where(SaleItem.prior_confirmed_item_id.in_(item_ids)).values(prior_confirmed_item_id=None))
+    db.execute(delete(SaleItem).where(SaleItem.id.in_(item_ids)))
 
 
 def get_sale_or_404(sale_id: str, db: Session) -> Sale:
@@ -189,6 +225,74 @@ def get_sale(sale_id: str, current_user: User = Depends(get_current_user), db: S
     sale = get_sale_or_404(sale_id, db)
     assert_sale_access(sale, current_user)
     return sale_response(sale, db)
+
+
+@router.patch("/{sale_id}", response_model=SaleResponse)
+def update_sale(
+    sale_id: str, payload: SaleUpdate, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)
+) -> dict:
+    sale = get_sale_or_404(sale_id, db)
+    changes = payload.model_dump(exclude_unset=True)
+    old_customer_id = sale.customer_id
+    old_product_ids = set(db.scalars(select(SaleItem.product_id).where(SaleItem.sale_id == sale.id)))
+    before = sale_response(sale, db)
+
+    if "customer_id" in changes:
+        customer = db.get(Customer, changes["customer_id"])
+        if customer is None or customer.status != "ACTIVO":
+            raise HTTPException(status_code=422, detail="Customer must exist and be active")
+    if "items" in changes:
+        products = {item["product_id"]: db.get(Product, item["product_id"]) for item in changes["items"]}
+        if any(product is None or not product.is_active for product in products.values()):
+            raise HTTPException(status_code=422, detail="All products must exist and be active")
+        effective_date = changes.get("sale_date", sale.sale_date)
+        rules = {product_id: rule_for(product_id, effective_date, db) for product_id in products}
+        if any(rule is None for rule in rules.values()):
+            raise HTTPException(status_code=422, detail="Each product needs an effective repurchase rule on the sale date")
+        remove_sale_items_and_alerts(sale.id, db)
+        db.flush()
+        for payload_item in changes.pop("items"):
+            rule = rules[payload_item["product_id"]]
+            db.add(SaleItem(
+                sale_id=sale.id, product_id=payload_item["product_id"], quantity=payload_item["quantity"],
+                rule_duration_days=rule.duration_days, rule_alert_days=rule.alert_days,
+                expected_repurchase_date=effective_date + timedelta(days=rule.duration_days),
+            ))
+    elif "sale_date" in changes:
+        # Existing item rules remain a historical snapshot, but their due date follows the edited sale date.
+        remove_sale_items_and_alerts(sale.id, db)
+        # Recreate the same items after clearing alerts tied to their previous due dates.
+        for item in before["items"]:
+            values = {key: item[key] for key in ("id", "sale_id", "product_id", "quantity", "rule_duration_days", "rule_alert_days", "purchase_type", "prior_confirmed_item_id", "created_at")}
+            values["expected_repurchase_date"] = changes["sale_date"] + timedelta(days=item["rule_duration_days"])
+            db.add(SaleItem(**values))
+    for field, value in changes.items():
+        setattr(sale, field, value.strip() if field in {"notes", "acquisition_channel_detail"} and value else value)
+    db.flush()
+    new_product_ids = set(db.scalars(select(SaleItem.product_id).where(SaleItem.sale_id == sale.id)))
+    if sale.status == "CONFIRMADA":
+        recompute_chain(old_customer_id, old_product_ids, db)
+        recompute_chain(sale.customer_id, new_product_ids, db)
+    record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="UPDATED", before=jsonable_encoder(before), after=jsonable_encoder(sale_response(sale, db)))
+    db.commit()
+    return sale_response(sale, db)
+
+
+@router.delete("/{sale_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_sale(sale_id: str, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> None:
+    sale = get_sale_or_404(sale_id, db)
+    snapshot = sale_response(sale, db)
+    customer_id = sale.customer_id
+    product_ids = set(db.scalars(select(SaleItem.product_id).where(SaleItem.sale_id == sale.id)))
+    # Preserve replacement sales while removing the now-invalid replacement relationship.
+    db.execute(update(Sale).where(Sale.replaces_sale_id == sale.id).values(replaces_sale_id=None))
+    remove_sale_items_and_alerts(sale.id, db)
+    db.execute(delete(SaleDuplicateReview).where(SaleDuplicateReview.sale_id == sale.id))
+    record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="HARD_DELETED", before=jsonable_encoder(snapshot))
+    db.delete(sale)
+    db.flush()
+    recompute_chain(customer_id, product_ids, db)
+    db.commit()
 
 
 @router.post("/{sale_id}/duplicate-review", response_model=SaleResponse)

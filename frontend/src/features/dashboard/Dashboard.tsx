@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
-import type { Alert, User } from "../../services/types";
+import { Modal } from "../../components/Modal";
+import type { Alert, TypificationTree, User } from "../../services/types";
 type Metrics = {
   alerts_considered: number;
   contact_rate: number;
@@ -12,6 +13,10 @@ export function Dashboard({ user }: { user: User }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [users, setUsers] = useState<User[]>([]);
+  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [typifications, setTypifications] = useState<TypificationTree[]>([]);
+  const [typificationId, setTypificationId] = useState("");
+  const [managementError, setManagementError] = useState("");
   useEffect(() => {
     api<Alert[]>("/alerts/inbox")
       .then(setAlerts)
@@ -25,10 +30,58 @@ export function Dashboard({ user }: { user: User }) {
           .then(setUsers)
           .catch(() => {});
     }
+    if (user.role === "ASESOR")
+      api<TypificationTree[]>("/configuration/contact-typifications/tree")
+        .then(setTypifications)
+        .catch(() => {});
   }, [user.role]);
   const open = alerts.filter((a) =>
     ["PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA"].includes(a.status),
   );
+  const leaves = (nodes: TypificationTree[]): TypificationTree[] =>
+    nodes.flatMap((node) =>
+      node.children.length ? leaves(node.children) : node.is_active ? [node] : [],
+    );
+  const selectableTypifications = leaves(typifications);
+  const selectedTypification = selectableTypifications.find((item) => item.id === typificationId);
+  const openAlert = async (alert: Alert) => {
+    setManagementError("");
+    setTypificationId("");
+    setSelectedAlert(alert);
+    try {
+      setSelectedAlert(await api<Alert>(`/alerts/${alert.id}`));
+    } catch {
+      // The inbox payload remains sufficient to inspect and manage the alert.
+    }
+  };
+  const closeAlert = () => {
+    setSelectedAlert(null);
+    setTypificationId("");
+    setManagementError("");
+  };
+  const manageAlert = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedAlert || !selectedTypification) return;
+    const form = new FormData(event.currentTarget);
+    try {
+      await api(`/alerts/${selectedAlert.id}/attempts`, {
+        method: "POST",
+        body: JSON.stringify({
+          channel: form.get("channel"),
+          result: selectedTypification.code,
+          typification_id: selectedTypification.id,
+          note: form.get("note") || undefined,
+          next_action_date: form.get("next_action_date") || undefined,
+        }),
+      });
+      closeAlert();
+      setAlerts(await api<Alert[]>("/alerts/inbox"));
+    } catch (reason) {
+      setManagementError(
+        reason instanceof Error ? reason.message : "No fue posible registrar la gestión.",
+      );
+    }
+  };
   return (
     <>
       <div className="page-title">
@@ -94,38 +147,172 @@ export function Dashboard({ user }: { user: User }) {
           </article>
         </section>
       )}
-      <section className="panel">
-        <h2>Próximos vencimientos</h2>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Fecha</th>
-                <th>Estado</th>
-                <th>Intentos</th>
-                <th>Asignado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {alerts.slice(0, 7).map((a) => (
-                <tr key={a.id}>
-                  <td>{a.expected_repurchase_date}</td>
-                  <td>
-                    <span className="badge">{a.status.replaceAll("_", " ")}</span>
-                  </td>
-                  <td>{a.attempts_count}</td>
-                  <td>{a.assigned_advisor_id ? "Asesor asignado" : "Sin asignar"}</td>
-                </tr>
-              ))}
-              {!alerts.length && (
+      {user.role === "ASESOR" ? (
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Mis alertas</h2>
+              <p>Selecciona una alerta para revisar el cliente y registrar la gestión.</p>
+            </div>
+            <span className="header-metric">
+              <b>{alerts.length}</b> activas
+            </span>
+          </div>
+          <div className="alert-list">
+            {alerts.map((alert) => (
+              <button className="alert-row" key={alert.id} onClick={() => openAlert(alert)}>
+                <span>
+                  <b>
+                    {alert.customer_first_names} {alert.customer_last_names}
+                  </b>
+                  <small>
+                    {alert.product_name || alert.product_code || "Producto"} · vence{" "}
+                    {alert.expected_repurchase_date}
+                  </small>
+                </span>
+                <span className="status warning">{alert.status.replaceAll("_", " ")}</span>
+                <span>Gestionar</span>
+              </button>
+            ))}
+            {!alerts.length && <p>No hay alertas activas.</p>}
+          </div>
+        </section>
+      ) : (
+        <section className="panel">
+          <h2>Próximos vencimientos</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={4}>No hay alertas activas.</td>
+                  <th>Fecha</th>
+                  <th>Estado</th>
+                  <th>Intentos</th>
+                  <th>Asignado</th>
                 </tr>
+              </thead>
+              <tbody>
+                {alerts.slice(0, 7).map((a) => (
+                  <tr key={a.id}>
+                    <td>{a.expected_repurchase_date}</td>
+                    <td>
+                      <span className="badge">{a.status.replaceAll("_", " ")}</span>
+                    </td>
+                    <td>{a.attempts_count}</td>
+                    <td>{a.assigned_advisor_id ? "Asesor asignado" : "Sin asignar"}</td>
+                  </tr>
+                ))}
+                {!alerts.length && (
+                  <tr>
+                    <td colSpan={4}>No hay alertas activas.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      {selectedAlert && (
+        <Modal title="Gestionar alerta" onClose={closeAlert}>
+          <div className="alert-detail">
+            <p>
+              <b>Cliente:</b>{" "}
+              {[selectedAlert.customer_first_names, selectedAlert.customer_last_names]
+                .filter(Boolean)
+                .join(" ") || "Sin información"}
+            </p>
+            <p>
+              <b>Contacto:</b>{" "}
+              {[selectedAlert.customer_phone, selectedAlert.customer_email]
+                .filter(Boolean)
+                .join(" · ") || "Sin información"}
+            </p>
+            <p>
+              <b>Producto:</b>{" "}
+              {[
+                selectedAlert.product_name,
+                selectedAlert.product_brand,
+                selectedAlert.product_category,
+              ]
+                .filter(Boolean)
+                .join(" · ") || "Sin información"}
+            </p>
+            <p>
+              <b>Venta original:</b> {selectedAlert.original_sale_date || "Sin información"}
+            </p>
+            <p>
+              <b>Vendedor:</b>{" "}
+              {selectedAlert.seller_advisor_name ||
+                selectedAlert.seller_advisor_email ||
+                "Sin información"}
+            </p>
+            <p>
+              <b>Fecha prevista:</b> {selectedAlert.expected_repurchase_date}
+            </p>
+          </div>
+          <form onSubmit={manageAlert}>
+            <div className="form-grid">
+              <label>
+                Tipificación
+                <select
+                  value={typificationId}
+                  onChange={(event) => setTypificationId(event.target.value)}
+                  required
+                >
+                  <option value="">Selecciona una tipificación</option>
+                  {selectableTypifications.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.code})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Canal de contacto
+                <select name="channel" defaultValue="LLAMADA" required>
+                  <option value="LLAMADA">Llamada</option>
+                  <option value="WHATSAPP">WhatsApp</option>
+                  <option value="EMAIL">Correo</option>
+                  <option value="OTRO">Otro</option>
+                </select>
+              </label>
+              {selectedTypification?.requires_next_action && (
+                <label>
+                  Próxima acción
+                  <input
+                    name="next_action_date"
+                    type="date"
+                    min={new Date().toISOString().slice(0, 10)}
+                    required
+                  />
+                </label>
               )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              {selectedTypification?.requires_note && (
+                <label className="notes">
+                  Nota de gestión
+                  <textarea name="note" maxLength={4000} required />
+                </label>
+              )}
+            </div>
+            {selectedTypification?.requires_close && (
+              <p className="success-message">
+                Esta tipificación cerrará la alerta automáticamente.
+              </p>
+            )}
+            {!selectableTypifications.length && (
+              <p className="form-error">
+                No hay tipificaciones activas disponibles para gestionar la alerta.
+              </p>
+            )}
+            {managementError && <p className="form-error">{managementError}</p>}
+            <footer>
+              <button type="button" className="secondary" onClick={closeAlert}>
+                Cancelar
+              </button>
+              <button disabled={!selectedTypification}>Registrar gestión</button>
+            </footer>
+          </form>
+        </Modal>
+      )}
     </>
   );
 }

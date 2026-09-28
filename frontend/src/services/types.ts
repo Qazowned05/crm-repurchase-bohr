@@ -48,6 +48,22 @@ export type Alert = {
   status: string;
   attempts_count: number;
   next_action_date?: string | null;
+  customer_id?: string | null;
+  customer_dni?: string | null;
+  customer_first_names?: string | null;
+  customer_last_names?: string | null;
+  customer_phone?: string | null;
+  customer_email?: string | null;
+  product_id?: string | null;
+  product_code?: string | null;
+  product_name?: string | null;
+  product_brand?: string | null;
+  product_category?: string | null;
+  original_sale_id?: string | null;
+  original_sale_date?: string | null;
+  seller_advisor_id?: string | null;
+  seller_advisor_name?: string | null;
+  seller_advisor_email?: string | null;
 };
 export type Typification = {
   id: string;
@@ -82,6 +98,10 @@ export type SaleItem = {
   product_id: string;
   quantity: number;
   purchase_type?: string | null;
+  product_code?: string | null;
+  product_name?: string | null;
+  product_brand?: string | null;
+  product_category?: string | null;
 };
 export type Sale = {
   id: string;
@@ -90,6 +110,15 @@ export type Sale = {
   sale_date: string;
   notes?: string | null;
   status: string;
+  acquisition_channel?: string | null;
+  acquisition_channel_detail?: string | null;
+  customer_dni?: string | null;
+  customer_first_names?: string | null;
+  customer_last_names?: string | null;
+  customer_phone?: string | null;
+  customer_email?: string | null;
+  advisor_full_name?: string | null;
+  advisor_email?: string | null;
   items: SaleItem[];
 };
 export type AdvisorSalesMetrics = {

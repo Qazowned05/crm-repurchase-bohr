@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.dependencies import require_roles
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.alerts.schemas import AlertResponse
-from app.modules.alerts.service import active_alerts_query
+from app.modules.alerts.service import active_alerts_query, alert_response
 from app.modules.alerts.service import recovery_alerts_query
 from app.modules.auth.models import User
 from app.modules.configuration.models import ContactTypification
@@ -101,8 +101,8 @@ def customer_assignment_history(customer_id: str, current_user: User = Depends(r
 
 
 @router.get("/recovery-alerts", response_model=list[AlertResponse])
-def recovery_alerts(current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[Alert]:
-    return list(db.scalars(recovery_alerts_query(db).order_by(Alert.alert_date)))
+def recovery_alerts(current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[dict]:
+    return [alert_response(alert, db) for alert in db.scalars(recovery_alerts_query(db).order_by(Alert.alert_date))]
 
 
 @router.get("/recovery-queue", response_model=list[RecoveryCustomerResponse])
@@ -160,7 +160,7 @@ def recovery_queue(
 
 
 @router.post("/alerts/{alert_id}/assign", response_model=AlertResponse)
-def assign_recovery_alert(alert_id: str, payload: AssignmentCreate, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> Alert:
+def assign_recovery_alert(alert_id: str, payload: AssignmentCreate, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> dict:
     if payload.assigned_advisor_id is None:
         raise HTTPException(status_code=422, detail="An active advisor is required")
     validate_responsible(payload.assigned_advisor_id, db)
@@ -172,7 +172,7 @@ def assign_recovery_alert(alert_id: str, payload: AssignmentCreate, current_user
         alert.status, alert.closed_at = "PENDIENTE", None
     db.commit()
     db.refresh(alert)
-    return alert
+    return alert_response(alert, db)
 
 
 @router.get("/alerts/{alert_id}/assignment-history", response_model=list[AlertAssignmentHistoryResponse])

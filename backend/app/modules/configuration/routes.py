@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import record_audit
 from app.core.config import settings
 from app.core.database import get_db
-from app.dependencies import require_roles
+from app.dependencies import get_current_user, require_roles
 from app.modules.auth.models import User
 from app.modules.configuration.models import AlertOperationalSettings, ContactTypification
 from app.modules.configuration.schemas import (
@@ -36,7 +36,7 @@ def list_contact_typifications(current_user: User = Depends(require_roles("SUPER
 
 
 @router.get("/contact-typifications/tree", response_model=list[ContactTypificationTreeResponse])
-def contact_typification_tree(current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[dict]:
+def contact_typification_tree(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
     nodes = {
         record.id: {"id": record.id, "parent_id": record.parent_id, "code": record.code, "name": record.name,
                     "is_active": record.is_active, "requires_next_action": record.requires_next_action,
