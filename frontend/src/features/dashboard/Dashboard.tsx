@@ -15,7 +15,8 @@ export function Dashboard({ user }: { user: User }) {
   const [users, setUsers] = useState<User[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [typifications, setTypifications] = useState<TypificationTree[]>([]);
-  const [typificationId, setTypificationId] = useState("");
+  const [parentTypificationId, setParentTypificationId] = useState("");
+  const [childTypificationId, setChildTypificationId] = useState("");
   const [managementError, setManagementError] = useState("");
   useEffect(() => {
     api<Alert[]>("/alerts/inbox")
@@ -38,15 +39,16 @@ export function Dashboard({ user }: { user: User }) {
   const open = alerts.filter((a) =>
     ["PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA"].includes(a.status),
   );
-  const leaves = (nodes: TypificationTree[]): TypificationTree[] =>
-    nodes.flatMap((node) =>
-      node.children.length ? leaves(node.children) : node.is_active ? [node] : [],
-    );
-  const selectableTypifications = leaves(typifications);
-  const selectedTypification = selectableTypifications.find((item) => item.id === typificationId);
+  const rootTypifications = typifications.filter((item) => item.is_active);
+  const selectedParent = rootTypifications.find((item) => item.id === parentTypificationId);
+  const childTypifications = selectedParent?.children.filter((item) => item.is_active) || [];
+  const selectedChild = childTypifications.find((item) => item.id === childTypificationId);
+  const selectedTypification =
+    selectedChild || (selectedParent?.children.length === 0 ? selectedParent : undefined);
   const openAlert = async (alert: Alert) => {
     setManagementError("");
-    setTypificationId("");
+    setParentTypificationId("");
+    setChildTypificationId("");
     setSelectedAlert(alert);
     try {
       setSelectedAlert(await api<Alert>(`/alerts/${alert.id}`));
@@ -56,7 +58,8 @@ export function Dashboard({ user }: { user: User }) {
   };
   const closeAlert = () => {
     setSelectedAlert(null);
-    setTypificationId("");
+    setParentTypificationId("");
+    setChildTypificationId("");
     setManagementError("");
   };
   const manageAlert = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -254,14 +257,39 @@ export function Dashboard({ user }: { user: User }) {
               <label>
                 Tipificación
                 <select
-                  value={typificationId}
-                  onChange={(event) => setTypificationId(event.target.value)}
+                  value={parentTypificationId}
+                  onChange={(event) => {
+                    setParentTypificationId(event.target.value);
+                    setChildTypificationId("");
+                  }}
                   required
                 >
                   <option value="">Selecciona una tipificación</option>
-                  {selectableTypifications.map((item) => (
+                  {rootTypifications.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.name} ({item.code})
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Subtipificación
+                <select
+                  value={childTypificationId}
+                  onChange={(event) => setChildTypificationId(event.target.value)}
+                  disabled={!selectedParent || selectedParent.children.length === 0}
+                  required={selectedParent !== undefined && selectedParent.children.length > 0}
+                >
+                  <option value="">
+                    {!selectedParent
+                      ? "Selecciona primero una tipificación"
+                      : selectedParent.children.length === 0
+                        ? "No tiene subtipificaciones"
+                        : "Selecciona una subtipificación"}
+                  </option>
+                  {childTypifications.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
                     </option>
                   ))}
                 </select>
@@ -298,7 +326,12 @@ export function Dashboard({ user }: { user: User }) {
                 Esta tipificación cerrará la alerta automáticamente.
               </p>
             )}
-            {!selectableTypifications.length && (
+            {selectedParent?.children.length === 0 && (
+              <p className="muted">
+                Esta tipificación no tiene subtipificaciones y se registrará como resultado final.
+              </p>
+            )}
+            {!rootTypifications.length && (
               <p className="form-error">
                 No hay tipificaciones activas disponibles para gestionar la alerta.
               </p>
