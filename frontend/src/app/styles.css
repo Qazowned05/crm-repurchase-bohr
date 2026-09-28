@@ -101,12 +101,12 @@ aside {
 .brand b {
   font-size: 13px;
 }
-nav {
+aside nav {
   display: grid;
   gap: 2px;
   margin-top: 36px;
 }
-nav button {
+aside nav button {
   width: 100%;
   min-height: 40px;
   border: 0;
@@ -118,8 +118,8 @@ nav button {
   text-align: left;
   font-weight: 600;
 }
-nav button:hover,
-nav button.active {
+aside nav button:hover,
+aside nav button.active {
   border-left-color: #fff;
   background: #00528c;
   color: #fff;
@@ -354,6 +354,7 @@ nav button.active {
   justify-content: center;
   min-width: 32px;
   padding: 0 0.45rem;
+  width: auto;
 }
 
 .pagination button:hover:not(:disabled),
@@ -922,18 +923,18 @@ button.alert-row:hover {
   .brand {
     display: none;
   }
-  nav {
+  aside nav {
     display: flex;
     margin: 0;
     overflow-x: auto;
   }
-  nav button {
+  aside nav button {
     flex: 0 0 auto;
     border-left: 0;
     border-bottom: 3px solid transparent;
   }
-  nav button:hover,
-  nav button.active {
+  aside nav button:hover,
+  aside nav button.active {
     border-left: 0;
     border-bottom-color: #fff;
   }
