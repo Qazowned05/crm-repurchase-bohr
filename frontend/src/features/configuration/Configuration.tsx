@@ -112,7 +112,11 @@ export function Configuration() {
     { name: "is_active", label: "Activa", type: "checkbox" },
     { name: "requires_next_action", label: "Requiere siguiente acción", type: "checkbox" },
     { name: "requires_note", label: "Requiere nota", type: "checkbox" },
-    { name: "requires_close", label: "Requiere cierre", type: "checkbox" },
+    {
+      name: "requires_close",
+      label: "Cierra la alerta automáticamente",
+      type: "checkbox",
+    },
   ];
   return (
     <>

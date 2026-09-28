@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.core.audit import record_audit
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.modules.alerts.models import Alert
+from app.modules.alerts.models import Alert, AlertContactAttempt
+from app.modules.configuration.models import ContactTypification
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
 from app.modules.configuration.models import AlertOperationalSettings
@@ -33,6 +34,7 @@ def alert_response(alert: Alert, db: Session) -> dict:
     customer = db.get(Customer, sale.customer_id) if sale else None
     product = db.get(Product, item.product_id) if item else None
     advisor = db.get(User, sale.advisor_id) if sale else None
+    assigned_advisor = db.get(User, alert.assigned_advisor_id) if alert.assigned_advisor_id else None
     return {
         **{column.name: getattr(alert, column.name) for column in Alert.__table__.columns},
         "customer_id": customer.id if customer else None, "customer_dni": customer.dni if customer else None,
@@ -42,6 +44,38 @@ def alert_response(alert: Alert, db: Session) -> dict:
         "product_name": product.name if product else None, "original_sale_id": sale.id if sale else None,
         "original_sale_date": sale.sale_date if sale else None, "seller_advisor_id": advisor.id if advisor else None,
         "seller_advisor_name": advisor.full_name if advisor else None, "seller_advisor_email": advisor.email if advisor else None,
+        "assigned_advisor_name": assigned_advisor.full_name if assigned_advisor else None,
+        "assigned_advisor_email": assigned_advisor.email if assigned_advisor else None,
+    }
+
+
+def contact_attempt_response(attempt: AlertContactAttempt, db: Session) -> dict:
+    typification = db.get(ContactTypification, attempt.typification_id) if attempt.typification_id else db.scalar(
+        select(ContactTypification).where(ContactTypification.code == attempt.result)
+    )
+    parent = db.get(ContactTypification, typification.parent_id) if typification and typification.parent_id else None
+    advisor = db.get(User, attempt.advisor_id)
+    return {
+        **{column.name: getattr(attempt, column.name) for column in AlertContactAttempt.__table__.columns},
+        "observation": attempt.note,
+        "user_name": advisor.full_name if advisor else None,
+        # A root typification is the parent classification; a descendant is the child classification.
+        "parent_typification_name": parent.name if parent else (typification.name if typification else None),
+        "child_typification_name": typification.name if parent else None,
+    }
+
+
+def managed_alert_response(alert: Alert, db: Session) -> dict:
+    return {
+        **alert_response(alert, db),
+        "contact_attempts": [
+            contact_attempt_response(attempt, db)
+            for attempt in db.scalars(
+                select(AlertContactAttempt)
+                .where(AlertContactAttempt.alert_id == alert.id)
+                .order_by(AlertContactAttempt.contacted_at, AlertContactAttempt.id)
+            )
+        ],
     }
 
 
@@ -170,7 +204,8 @@ def close_alerts_for_repurchase(customer_id: str, product_ids: set[str], new_sal
     for alert in alerts:
         alert.status = "RECOMPRA_LOGRADA" if alert.id == source_alert_id else "CANCELADO_POR_RECOMPRA"
         alert.closed_at = datetime.now(timezone.utc)
-        record_audit(db, actor_id=actor_id, entity_type="alert", entity_id=alert.id, action="REPURCHASE_ACHIEVED" if alert.id == source_alert_id else "CANCELLED_BY_REPURCHASE", after={"status": alert.status})
+        alert.closure_reason = f"RECOMPRA_CONFIRMADA: venta {new_sale_id}"
+        record_audit(db, actor_id=actor_id, entity_type="alert", entity_id=alert.id, action="REPURCHASE_ACHIEVED" if alert.id == source_alert_id else "CANCELLED_BY_REPURCHASE", after={"status": alert.status, "closure_reason": alert.closure_reason, "repurchase_sale_id": new_sale_id})
 
 
 def close_alerts_for_annulment(sale_id: str, db: Session, actor_id: str | None) -> None:
@@ -178,4 +213,5 @@ def close_alerts_for_annulment(sale_id: str, db: Session, actor_id: str | None) 
     for alert in alerts:
         alert.status = "CANCELADO_POR_ANULACION"
         alert.closed_at = datetime.now(timezone.utc)
+        alert.closure_reason = "VENTA_ORIGINAL_ANULADA"
         record_audit(db, actor_id=actor_id, entity_type="alert", entity_id=alert.id, action="CANCELLED_BY_ANNULMENT", after={"status": alert.status})

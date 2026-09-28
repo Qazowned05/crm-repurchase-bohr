@@ -21,6 +21,7 @@ class Alert(Base):
     next_action_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -34,5 +35,6 @@ class AlertContactAttempt(Base):
     contacted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     channel: Mapped[str] = mapped_column(String(20))
     result: Mapped[str] = mapped_column(String(40))
+    typification_id: Mapped[str | None] = mapped_column(ForeignKey("contact_typifications.id", ondelete="RESTRICT"), nullable=True, index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action_date: Mapped[date | None] = mapped_column(Date, nullable=True)

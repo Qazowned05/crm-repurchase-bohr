@@ -43,6 +43,8 @@ export type ProductRepurchaseRule = {
 export type Alert = {
   id: string;
   assigned_advisor_id?: string | null;
+  assigned_advisor_name?: string | null;
+  assigned_advisor_email?: string | null;
   alert_date: string;
   expected_repurchase_date: string;
   status: string;
@@ -64,6 +66,26 @@ export type Alert = {
   seller_advisor_id?: string | null;
   seller_advisor_name?: string | null;
   seller_advisor_email?: string | null;
+};
+export type ContactAttempt = {
+  id: string;
+  alert_id: string;
+  advisor_id: string;
+  contacted_at: string;
+  channel: string;
+  result: string;
+  note?: string | null;
+  next_action_date?: string | null;
+  observation?: string | null;
+  user_name?: string | null;
+  parent_typification_name?: string | null;
+  child_typification_name?: string | null;
+};
+export type ManagedAlert = Alert & {
+  last_contact_at?: string | null;
+  closed_at?: string | null;
+  closure_reason?: string | null;
+  contact_attempts: ContactAttempt[];
 };
 export type Typification = {
   id: string;

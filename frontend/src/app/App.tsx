@@ -7,8 +7,16 @@ import { RecoveryQueue } from "../features/recovery/RecoveryQueue";
 import { Maintenance } from "../features/maintenance/Maintenance";
 import { Configuration } from "../features/configuration/Configuration";
 import { Sales } from "../features/sales/Sales";
+import { AlertRegister } from "../features/alerts/AlertRegister";
 type View =
-  "dashboard" | "sales" | "recovery" | "customers" | "products" | "users" | "configuration";
+  | "dashboard"
+  | "sales"
+  | "alert-register"
+  | "recovery"
+  | "customers"
+  | "products"
+  | "users"
+  | "configuration";
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<View>("dashboard");
@@ -25,6 +33,7 @@ export function App() {
   const nav: Array<[View, string]> = [
     ["dashboard", "Resumen"],
     ["sales", "Ventas"],
+    ["alert-register", "Registro de alertas"],
   ];
   if (supervisor)
     nav.push(
@@ -39,6 +48,8 @@ export function App() {
       <Dashboard user={user} />
     ) : view === "sales" ? (
       <Sales user={user} />
+    ) : view === "alert-register" ? (
+      <AlertRegister />
     ) : view === "recovery" ? (
       <RecoveryQueue />
     ) : view === "configuration" ? (

@@ -13,7 +13,7 @@ from app.modules.customers.models import Customer
 from app.modules.products.models import Product, ProductRepurchaseRule
 from app.modules.sales.models import Sale, SaleDuplicateReview, SaleItem
 from app.modules.sales.schemas import AdvisorSalesMetricsResponse, AnnulSaleCreate, DuplicateReviewCreate, SaleCreate, SaleResponse, SaleUpdate
-from app.modules.alerts.service import close_alerts_for_annulment, close_alerts_for_repurchase
+from app.modules.alerts.service import FINAL_STATUSES, close_alerts_for_annulment, close_alerts_for_repurchase
 from app.modules.alerts.models import Alert
 
 router = APIRouter(prefix="/api/v1/sales", tags=["sales"])
@@ -162,7 +162,7 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
         source_alert = db.get(Alert, payload.source_alert_id)
         source_product_id = db.scalar(select(SaleItem.product_id).where(SaleItem.id == source_alert.sale_item_id)) if source_alert else None
         source_customer_id = db.scalar(select(Sale.customer_id).join(SaleItem, SaleItem.sale_id == Sale.id).where(SaleItem.id == source_alert.sale_item_id)) if source_alert else None
-        if source_alert is None or source_alert.status in {"RECOMPRA_LOGRADA", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CANCELADO_POR_ANULACION", "VENCIDO_NO_GESTIONADO"} or source_customer_id != customer.id or source_product_id not in products:
+        if source_alert is None or source_alert.status in FINAL_STATUSES or source_customer_id != customer.id or source_product_id not in products:
             raise HTTPException(status_code=422, detail="Source alert must be active and belong to the customer and a sold product")
     if sale.status == "CONFIRMADA":
         if first_confirmed_sale and customer.acquisition_channel is None:

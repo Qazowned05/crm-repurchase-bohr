@@ -14,6 +14,8 @@ class AlertResponse(BaseModel):
     id: str
     sale_item_id: str
     assigned_advisor_id: str | None
+    assigned_advisor_name: str | None = None
+    assigned_advisor_email: str | None = None
     alert_date: date
     expected_repurchase_date: date
     status: str
@@ -21,6 +23,7 @@ class AlertResponse(BaseModel):
     next_action_date: date | None
     last_contact_at: datetime | None
     closed_at: datetime | None
+    closure_reason: str | None
     created_at: datetime
     customer_id: str | None = None
     customer_dni: str | None = None
@@ -49,5 +52,13 @@ class ContactAttemptResponse(BaseModel):
     result: str
     note: str | None
     next_action_date: date | None
+    observation: str | None
+    user_name: str | None
+    parent_typification_name: str | None
+    child_typification_name: str | None
 
     model_config = {"from_attributes": True}
+
+
+class ManagedAlertResponse(AlertResponse):
+    contact_attempts: list[ContactAttemptResponse]

@@ -464,6 +464,106 @@ form footer,
   align-items: end;
   gap: 12px;
 }
+.register-filter-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.25fr auto;
+  align-items: end;
+  gap: 12px;
+}
+.register-panel {
+  padding: 0 20px;
+}
+.alert-register-table td {
+  vertical-align: top;
+}
+.alert-register-table .secondary {
+  min-height: 32px;
+  padding: 5px 9px;
+}
+.status.warning {
+  border-color: #d9aa5d;
+  background: #fff8eb;
+  color: #875000;
+}
+.alert-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border-bottom: 1px solid #dce5ec;
+  padding-bottom: 16px;
+}
+.alert-summary span,
+.alert-summary b,
+.alert-summary small {
+  display: block;
+}
+.alert-summary span {
+  color: #718596;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.alert-summary b {
+  margin-top: 4px;
+  color: #003b67;
+  font-size: 13px;
+}
+.alert-summary small {
+  margin-top: 3px;
+}
+.closed-text {
+  color: #006345 !important;
+}
+.pending-text {
+  color: #875000 !important;
+}
+.closure-reason,
+.follow-up-note {
+  margin: 16px 0;
+  border-left: 3px solid #00734d;
+  background: #edf7f2;
+  padding: 10px 12px;
+  color: #29475e;
+  font-size: 13px;
+}
+.follow-up-note {
+  border-left-color: #a15c00;
+  background: #fff8eb;
+}
+.history-title {
+  margin: 22px 0 12px !important;
+}
+.management-history {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.management-history li {
+  border-left: 2px solid #9db5c8;
+  border-bottom: 1px solid #dce5ec;
+  padding: 0 0 15px 14px;
+  margin-left: 5px;
+}
+.management-history li + li {
+  padding-top: 15px;
+}
+.management-history li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #526b7d;
+  font-size: 12px;
+}
+.management-history li > div b {
+  color: #003b67;
+}
+.management-history p {
+  margin: 7px 0 0;
+  color: #29475e;
+  font-size: 13px;
+}
 .recovery-list {
   display: grid;
   gap: 12px;
@@ -748,6 +848,12 @@ button.alert-row:hover {
   .filter-grid {
     grid-template-columns: 1fr 1fr;
   }
+  .register-filter-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .register-filter-grid button {
+    grid-column: 1 / -1;
+  }
   .filter-grid button {
     grid-column: 1 / -1;
   }
@@ -809,6 +915,10 @@ button.alert-row:hover {
   .stats,
   .form-grid,
   .filter-grid {
+    grid-template-columns: 1fr;
+  }
+  .register-filter-grid,
+  .alert-summary {
     grid-template-columns: 1fr;
   }
   .panel {

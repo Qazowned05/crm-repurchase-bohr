@@ -87,9 +87,41 @@ def test_confirmed_repurchase_and_annulment_close_active_alerts(client: TestClie
     repurchase = client.post("/api/v1/sales", headers=advisor_auth, json={"customer_id": sale["customer_id"], "sale_date": str(date.today()), "source_alert_id": first_alert.id, "items": [{"product_id": product["id"], "quantity": 1}]}).json()
     db.refresh(first_alert)
     assert first_alert.status == "RECOMPRA_LOGRADA"
+    assert first_alert.closure_reason == f"RECOMPRA_CONFIRMADA: venta {repurchase['id']}"
+    assert repurchase["items"][0]["expected_repurchase_date"] == str(date.today() + timedelta(days=30))
     new_alert = Alert(sale_item_id=repurchase["items"][0]["id"], assigned_advisor_id=advisor.id, alert_date=date.today(), expected_repurchase_date=date.today() + timedelta(days=30))
     db.add(new_alert)
     db.commit()
     assert client.post(f"/api/v1/sales/{repurchase['id']}/annul", headers=supervisor_auth, json={"reason": "Venta anulada"}).status_code == 200
     db.refresh(new_alert)
     assert new_alert.status == "CANCELADO_POR_ANULACION"
+
+
+def test_managed_register_keeps_follow_up_and_closed_alert_history(client: TestClient, db: Session) -> None:
+    sale, _, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="register")
+    parent = client.post("/api/v1/configuration/contact-typifications", headers=supervisor_auth, json={"code": "CONTACTED_REGISTER", "name": "Contacted"}).json()
+    child = client.post("/api/v1/configuration/contact-typifications", headers=supervisor_auth, json={
+        "code": "CONTACTED_REGISTER_DONE", "name": "Completed", "parent_id": parent["id"], "requires_close": True,
+    }).json()
+    alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
+    advisor_auth = auth(client, advisor.email)
+    assert client.post(f"/api/v1/alerts/{alert['id']}/attempts", headers=advisor_auth, json={
+        "channel": "LLAMADA", "result": "ignored", "typification_id": child["id"], "note": "Customer confirmed closure",
+    }).status_code == 200
+
+    closed = client.get(f"/api/v1/alerts/register?state=closed&date_from={date.today()}&date_to={date.today()}", headers=advisor_auth)
+    assert closed.status_code == 200
+    record = closed.json()[0]
+    assert record["id"] == alert["id"]
+    assert record["status"] == "CERRADO_POR_TIPIFICACION"
+    assert record["closure_reason"] == "TIPIFICACION_DE_CIERRE: Completed"
+    assert record["customer_id"] == sale["customer_id"]
+    assert record["contact_attempts"] == [{
+        "id": record["contact_attempts"][0]["id"], "alert_id": alert["id"], "advisor_id": advisor.id,
+        "contacted_at": record["contact_attempts"][0]["contacted_at"], "channel": "LLAMADA", "result": "CONTACTED_REGISTER_DONE",
+        "note": "Customer confirmed closure", "next_action_date": None, "observation": "Customer confirmed closure",
+        "user_name": advisor.full_name, "parent_typification_name": "Contacted", "child_typification_name": "Completed",
+    }]
+    assert client.get("/api/v1/alerts/register?state=open-follow-up", headers=advisor_auth).json() == []
+    assert len(client.get("/api/v1/alerts/register?state=closed", headers=supervisor_auth).json()) == 1
+    assert client.get("/api/v1/alerts/register?date_from=2030-01-02&date_to=2030-01-01", headers=supervisor_auth).status_code == 422

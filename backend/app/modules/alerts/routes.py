@@ -8,8 +8,8 @@ from app.core.audit import record_audit
 from app.core.database import get_db
 from app.dependencies import get_current_user
 from app.modules.alerts.models import Alert, AlertContactAttempt
-from app.modules.alerts.schemas import AlertResponse, ContactAttemptCreate, ContactAttemptResponse
-from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, alert_response, run_alert_generation
+from app.modules.alerts.schemas import AlertResponse, ContactAttemptCreate, ContactAttemptResponse, ManagedAlertResponse
+from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, alert_response, contact_attempt_response, managed_alert_response, run_alert_generation
 from app.modules.alerts.service import advisor_visible_alerts_query
 from app.modules.auth.models import User
 from app.modules.configuration.models import ContactTypification
@@ -47,6 +47,31 @@ def inbox(current_user: User = Depends(get_current_user), db: Session = Depends(
     return [alert_response(alert, db) for alert in db.scalars(query)]
 
 
+@router.get("/register", response_model=list[ManagedAlertResponse])
+def managed_register(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    state: str | None = Query(default=None, pattern="^(open-follow-up|closed)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """Persistent managed-alert register; unlike inbox, it includes follow-up and closed alerts."""
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from cannot exceed date_to")
+    query = select(Alert)
+    if current_user.role == "ASESOR":
+        query = query.where(Alert.assigned_advisor_id == current_user.id)
+    if date_from:
+        query = query.where(Alert.alert_date >= date_from)
+    if date_to:
+        query = query.where(Alert.alert_date <= date_to)
+    if state == "open-follow-up":
+        query = query.where(Alert.status.not_in(FINAL_STATUSES))
+    elif state == "closed":
+        query = query.where(Alert.status.in_(FINAL_STATUSES))
+    return [managed_alert_response(alert, db) for alert in db.scalars(query.order_by(Alert.alert_date.desc(), Alert.created_at.desc()))]
+
+
 @router.get("/{alert_id}", response_model=AlertResponse)
 def get_alert(alert_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     alert = alert_or_404(alert_id, db)
@@ -58,7 +83,7 @@ def get_alert(alert_id: str, current_user: User = Depends(get_current_user), db:
 def list_attempts(alert_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[AlertContactAttempt]:
     alert = alert_or_404(alert_id, db)
     assert_alert_access(alert, current_user)
-    return list(db.scalars(select(AlertContactAttempt).where(AlertContactAttempt.alert_id == alert.id).order_by(AlertContactAttempt.contacted_at)))
+    return [contact_attempt_response(attempt, db) for attempt in db.scalars(select(AlertContactAttempt).where(AlertContactAttempt.alert_id == alert.id).order_by(AlertContactAttempt.contacted_at, AlertContactAttempt.id))]
 
 
 @router.post("/{alert_id}/attempts", response_model=AlertResponse)
@@ -94,7 +119,7 @@ def add_attempt(alert_id: str, payload: ContactAttemptCreate, current_user: User
         raise HTTPException(status_code=422, detail="OTRO requires a next action date or close_alert")
     if result == "RECOMPRA_REGISTRADA":
         raise HTTPException(status_code=422, detail="RECOMPRA_REGISTRADA requires recording a confirmed sale")
-    attempt = AlertContactAttempt(alert_id=alert.id, advisor_id=current_user.id, channel=payload.channel.strip().upper(), result=result,
+    attempt = AlertContactAttempt(alert_id=alert.id, advisor_id=current_user.id, channel=payload.channel.strip().upper(), result=result, typification_id=typification.id if typification else None,
                                   note=payload.note.strip() if payload.note else None, next_action_date=payload.next_action_date)
     db.add(attempt)
     alert.attempts_count += 1
@@ -106,12 +131,15 @@ def add_attempt(alert_id: str, payload: ContactAttemptCreate, current_user: User
         alert.status = "SIN_RESPUESTA"
     elif result == "NO_INTERESADO":
         alert.status, alert.closed_at = "NO_INTERESADO", datetime.now(timezone.utc)
+        alert.closure_reason = "NO_INTERESADO"
     elif result == "DATOS_DE_CONTACTO_INCORRECTOS":
         alert.assigned_advisor_id, alert.status = None, "PENDIENTE"
     elif requires_close:
         alert.status, alert.closed_at = "CERRADO_POR_TIPIFICACION", datetime.now(timezone.utc)
+        alert.closure_reason = f"TIPIFICACION_DE_CIERRE: {typification.name}"
     elif payload.close_alert:
         alert.status, alert.closed_at = "CANCELADO_POR_RECOMPRA", datetime.now(timezone.utc)
+        alert.closure_reason = "CIERRE_MANUAL"
     record_audit(db, actor_id=current_user.id, entity_type="alert", entity_id=alert.id, action="CONTACT_ATTEMPT", after={"result": result, "status": alert.status, "next_action_date": str(alert.next_action_date) if alert.next_action_date else None})
     db.commit()
     return alert_response(alert, db)

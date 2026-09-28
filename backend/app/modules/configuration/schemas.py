@@ -10,7 +10,7 @@ class ContactTypificationCreate(BaseModel):
     is_active: bool = True
     requires_next_action: bool = False
     requires_note: bool = False
-    requires_close: bool = False
+    requires_close: bool = Field(default=False, description="Closing typification: using it closes the managed alert.")
 
     @field_validator("code")
     @classmethod
@@ -35,7 +35,7 @@ class ContactTypificationUpdate(BaseModel):
     is_active: bool | None = None
     requires_next_action: bool | None = None
     requires_note: bool | None = None
-    requires_close: bool | None = None
+    requires_close: bool | None = Field(default=None, description="Closing typification: using it closes the managed alert.")
 
     @field_validator("name")
     @classmethod
