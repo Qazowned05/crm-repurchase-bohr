@@ -705,6 +705,7 @@ button.alert-row:hover {
   max-width: 100%;
   border: 1px solid #9db5c8;
   background: #f4f8fb;
+  margin-bottom: 20px;
 }
 .management-mode-switch legend {
   position: absolute;
@@ -943,15 +944,17 @@ button.alert-row:hover {
   position: fixed;
   z-index: 20;
   inset: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
   background: rgba(0, 37, 64, 0.55);
   padding: 20px;
 }
 .modal {
   width: min(640px, 100%);
-  max-height: calc(100vh - 40px);
-  overflow: auto;
+  flex: 0 0 auto;
+  margin: auto 0;
   border: 1px solid #527f9f;
   border-radius: 2px;
   background: #fff;
@@ -1165,7 +1168,6 @@ button.alert-row:hover {
     padding: 12px;
   }
   .modal {
-    max-height: calc(100vh - 24px);
     padding: 18px;
   }
   .management-mode-switch {
