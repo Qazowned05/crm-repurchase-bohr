@@ -950,6 +950,7 @@ button.alert-row:hover {
   overflow-y: auto;
   background: rgba(0, 37, 64, 0.55);
   padding: 20px;
+  animation: overlay-fade-in 140ms ease-out;
 }
 .modal {
   width: min(640px, 100%);
@@ -959,6 +960,30 @@ button.alert-row:hover {
   border-radius: 2px;
   background: #fff;
   padding: 22px;
+  animation: modal-enter 160ms ease-out;
+  transform-origin: center;
+}
+
+@keyframes overlay-fade-in {
+  from {
+    background: rgba(0, 37, 64, 0);
+  }
+
+  to {
+    background: rgba(0, 37, 64, 0.55);
+  }
+}
+
+@keyframes modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 .modal > header {
   display: flex;

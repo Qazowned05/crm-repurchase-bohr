@@ -1,4 +1,5 @@
 import type { FormEvent, ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 export function Modal({
   title,
@@ -9,7 +10,7 @@ export function Modal({
   children: ReactNode;
   onClose: () => void;
 }) {
-  return (
+  return createPortal(
     <div className="overlay" role="presentation" onMouseDown={onClose}>
       <section
         className="modal"
@@ -25,7 +26,8 @@ export function Modal({
         </header>
         {children}
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 export function ConfirmModal({
