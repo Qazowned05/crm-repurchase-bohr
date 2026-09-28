@@ -33,19 +33,20 @@ def setup_sale(client: TestClient, db: Session, sale_date: date, duration: int =
     return sale, product, supervisor_auth, advisor
 
 
-def test_generation_is_idempotent_and_uses_current_responsible_advisor(client: TestClient, db: Session) -> None:
+def test_automatic_generation_is_idempotent_and_uses_due_date(client: TestClient, db: Session) -> None:
     run_date = date.today()
-    sale, _, supervisor_auth, advisor = setup_sale(client, db, run_date - timedelta(days=15))
-    first = client.post(f"/api/v1/alerts/generate?run_date={run_date}", headers=supervisor_auth)
-    assert first.status_code == 200 and first.json()["created"] == 1
-    assert client.post(f"/api/v1/alerts/generate?run_date={run_date}", headers=supervisor_auth).json()["created"] == 0
+    sale, _, supervisor_auth, advisor = setup_sale(client, db, run_date - timedelta(days=30))
+    assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).status_code == 200
+    assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).status_code == 200
     alert = db.query(Alert).one()
     assert alert.sale_item_id == sale["items"][0]["id"]
     assert alert.assigned_advisor_id == advisor.id
+    assert alert.alert_date == alert.expected_repurchase_date == run_date
+    assert client.post("/api/v1/alerts/generate", headers=supervisor_auth).status_code == 405
 
 
 def test_inbox_generates_today_alert_without_manual_generation(client: TestClient, db: Session) -> None:
-    sale, _, _, advisor = setup_sale(client, db, date.today() - timedelta(days=15), suffix="inbox")
+    sale, _, _, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="inbox")
     response = client.get("/api/v1/alerts/inbox", headers=auth(client, advisor.email))
     assert response.status_code == 200
     assert [alert["sale_item_id"] for alert in response.json()] == [sale["items"][0]["id"]]
@@ -56,18 +57,18 @@ def test_inbox_generates_today_alert_without_manual_generation(client: TestClien
 
 def test_past_sale_creates_one_pending_or_expired_alert(client: TestClient, db: Session) -> None:
     recent, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=40), duration=30)
-    response = client.post("/api/v1/alerts/generate", headers=supervisor_auth)
-    assert response.json()["pending"] == 1
+    assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).status_code == 200
     old, _, _, _ = setup_sale(client, db, date.today() - timedelta(days=70), duration=30, suffix="2")
-    response = client.post("/api/v1/alerts/generate", headers=supervisor_auth)
-    assert response.json()["expired"] == 1
+    assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).status_code == 200
     assert db.query(Alert).filter_by(sale_item_id=recent["items"][0]["id"]).count() == 1
     assert db.query(Alert).filter_by(sale_item_id=old["items"][0]["id"], status="VENCIDO_NO_GESTIONADO").count() == 1
+    assert db.query(Alert).filter_by(sale_item_id=recent["items"][0]["id"]).one().alert_date == date.today() - timedelta(days=10)
+    assert db.query(Alert).filter_by(sale_item_id=old["items"][0]["id"]).one().alert_date == date.today() - timedelta(days=40)
 
 
 def test_contact_attempt_validates_and_reprograms_inbox(client: TestClient, db: Session) -> None:
-    sale, _, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=15))
-    client.post("/api/v1/alerts/generate", headers=supervisor_auth)
+    sale, _, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30))
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
     alert = db.query(Alert).filter_by(sale_item_id=sale["items"][0]["id"]).one()
     advisor_auth = auth(client, advisor.email)
     invalid = client.post(f"/api/v1/alerts/{alert.id}/attempts", headers=advisor_auth, json={"channel": "LLAMADA", "result": "SIN_RESPUESTA"})
@@ -79,8 +80,8 @@ def test_contact_attempt_validates_and_reprograms_inbox(client: TestClient, db: 
 
 
 def test_confirmed_repurchase_and_annulment_close_active_alerts(client: TestClient, db: Session) -> None:
-    sale, product, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=15))
-    client.post("/api/v1/alerts/generate", headers=supervisor_auth)
+    sale, product, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30))
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
     first_alert = db.query(Alert).filter_by(sale_item_id=sale["items"][0]["id"]).one()
     advisor_auth = auth(client, advisor.email)
     repurchase = client.post("/api/v1/sales", headers=advisor_auth, json={"customer_id": sale["customer_id"], "sale_date": str(date.today()), "source_alert_id": first_alert.id, "items": [{"product_id": product["id"], "quantity": 1}]}).json()

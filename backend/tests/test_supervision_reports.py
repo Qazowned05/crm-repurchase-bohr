@@ -9,9 +9,9 @@ from tests.test_alerts import auth, make_user, setup_sale
 
 
 def test_portfolio_transfer_moves_active_alerts_and_records_history(client: TestClient, db: Session) -> None:
-    sale, _, supervisor_auth, original_advisor = setup_sale(client, db, date.today() - timedelta(days=15))
+    sale, _, supervisor_auth, original_advisor = setup_sale(client, db, date.today() - timedelta(days=30))
     replacement = make_user(db, "replacement@example.com", "ASESOR")
-    assert client.post("/api/v1/alerts/generate", headers=supervisor_auth).status_code == 200
+    assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).status_code == 200
     response = client.post(
         f"/api/v1/supervision/customers/{sale['customer_id']}/transfer", headers=supervisor_auth,
         json={"assigned_advisor_id": replacement.id, "reason": "Coverage change"},
@@ -26,9 +26,9 @@ def test_portfolio_transfer_moves_active_alerts_and_records_history(client: Test
 
 
 def test_recovery_queue_assigns_only_active_alerts(client: TestClient, db: Session) -> None:
-    sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=15), suffix="queue")
+    sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="queue")
     replacement = make_user(db, "queue-advisor@example.com", "ASESOR")
-    client.post("/api/v1/alerts/generate", headers=supervisor_auth)
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
     transfer = client.post(f"/api/v1/supervision/customers/{sale['customer_id']}/transfer", headers=supervisor_auth, json={"assigned_advisor_id": None, "reason": "Recovery queue"})
     assert transfer.status_code == 200
     queued = client.get("/api/v1/supervision/recovery-alerts", headers=supervisor_auth)
@@ -39,8 +39,8 @@ def test_recovery_queue_assigns_only_active_alerts(client: TestClient, db: Sessi
 
 
 def test_reports_filter_invalid_alerts_and_export_csv(client: TestClient, db: Session) -> None:
-    sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=15), suffix="report")
-    client.post("/api/v1/alerts/generate", headers=supervisor_auth)
+    sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="report")
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
     reports = client.get("/api/v1/reports/sales", headers=supervisor_auth)
     assert reports.status_code == 200
     assert reports.json()["rows"][0]["confirmed_sales"] == 1
