@@ -18,14 +18,14 @@ from app.modules.auth.models import User
 from app.modules.customers.models import Customer
 from app.modules.customers.schemas import CustomerCreate
 from app.modules.imports.models import ImportJob, ImportRowError
-from app.modules.products.models import Product, ProductRepurchaseRule
-from app.modules.products.schemas import ProductCreate, RuleCreate
+from app.modules.products.models import Brand, Product, ProductCategory, ProductRepurchaseRule
+from app.modules.products.schemas import RuleCreate
 
 router = APIRouter(prefix="/api/v1/imports", tags=["imports"])
 
 HEADERS = {
     "customers": ["dni", "first_names", "last_names", "phone", "email", "responsible_advisor_email"],
-    "products": ["code", "name", "category", "is_active", "duration_days", "alert_days", "effective_from", "medical_approval_reference", "medical_approved_by", "medical_approved_at"],
+    "products": ["code", "name", "brand", "category", "is_active", "duration_days", "alert_days", "effective_from"],
 }
 
 
@@ -45,6 +45,13 @@ def cell_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def catalog_record(model: type[Brand] | type[ProductCategory], name: str, label: str, db: Session) -> Brand | ProductCategory:
+    record = db.scalar(select(model).where(model.name == name.strip()))
+    if record is None or not record.is_active:
+        raise ValueError(f"{label} must be an existing active catalog entry")
+    return record
 
 
 def workbook_rows(content: bytes, import_type: str) -> tuple[list[dict], list[dict]]:
@@ -134,11 +141,17 @@ def validate_rows(rows: list[dict], import_type: str, db: Session, allow_updates
                 if existing and not allow_updates:
                     raise ValueError("Product code already exists; enable allow_updates to update it")
                 if not existing:
-                    ProductCreate(**{field: data[field] for field in ("code", "name", "category")})
+                    if not data["name"] or not data["brand"] or not data["category"]:
+                        raise ValueError("name, brand, and category are required for new products")
+                    catalog_record(Brand, data["brand"], "Brand", db)
+                    catalog_record(ProductCategory, data["category"], "Category", db)
                 else:
-                    ProductCreate(code=data["code"], name=data["name"] or existing.name, category=data["category"] or existing.category)
+                    if data["brand"]:
+                        catalog_record(Brand, data["brand"], "Brand", db)
+                    if data["category"]:
+                        catalog_record(ProductCategory, data["category"], "Category", db)
                 data["is_active"] = parse_bool(data["is_active"]) if data["is_active"] else None
-                rule_fields = ["duration_days", "alert_days", "effective_from", "medical_approval_reference", "medical_approved_by", "medical_approved_at"]
+                rule_fields = ["duration_days", "alert_days", "effective_from"]
                 supplied = [field for field in rule_fields if data[field] is not None]
                 if supplied and len(supplied) != len(rule_fields):
                     raise ValueError("All repurchase-rule fields are required when importing a rule")
@@ -146,7 +159,6 @@ def validate_rows(rows: list[dict], import_type: str, db: Session, allow_updates
                     data["duration_days"] = int(data["duration_days"])
                     data["alert_days"] = [int(day.strip()) for day in data["alert_days"].split(",")]
                     data["effective_from"] = date.fromisoformat(data["effective_from"]).isoformat()
-                    data["medical_approved_at"] = datetime.fromisoformat(data["medical_approved_at"].replace("Z", "+00:00")).isoformat()
                     RuleCreate(**{field: data[field] for field in rule_fields})
                     if existing and db.scalar(select(ProductRepurchaseRule).where(ProductRepurchaseRule.product_id == existing.id, ProductRepurchaseRule.effective_from == date.fromisoformat(data["effective_from"]))) is not None:
                         raise ValueError("A repurchase rule already exists for this effective date")
@@ -180,7 +192,7 @@ def download_template(import_type: str, _: User = Depends(require_roles("SUPERVI
     for cell in sheet[1]:
         cell.font = Font(bold=True)
     example = (["99999999", "Ana", "Ejemplo", "999999999", "ana@example.invalid", ""] if import_type == "customers" else
-               ["EXAMPLE-001", "Producto de ejemplo", "Ejemplos", "true", "30", "15,5", "2026-01-01", "MED-EXAMPLE", "Dr. Ejemplo", "2026-01-01T09:00:00+00:00"])
+               ["EXAMPLE-001", "Producto de ejemplo", "SIN MARCA", "Ejemplos", "true", "30", "15,5", "2026-01-01"])
     sheet.append(example)
     output = BytesIO()
     workbook.save(output)
@@ -266,15 +278,22 @@ def commit_import(job_id: str, current_user: User = Depends(require_roles("SUPER
             else:
                 product = db.scalar(select(Product).where(Product.code == data["code"]))
                 if product is None:
-                    product = Product(code=data["code"], name=data["name"].strip(), category=data["category"].strip(), is_active=True if data["is_active"] is None else data["is_active"])
+                    brand = catalog_record(Brand, data["brand"], "Brand", db)
+                    category = catalog_record(ProductCategory, data["category"], "Category", db)
+                    product = Product(code=data["code"], name=data["name"].strip(), brand_id=brand.id, category_id=category.id, is_active=True if data["is_active"] is None else data["is_active"])
                     db.add(product); db.flush(); record_audit(db, actor_id=current_user.id, entity_type="product", entity_id=product.id, action="CREATED", after={"code": product.code, "import_job_id": job.id})
                 elif job.allow_updates:
-                    changes = {field: data[field] for field in ("name", "category", "is_active") if data.get(field) is not None}; before = {field: getattr(product, field) for field in changes}
+                    changes = {field: data[field] for field in ("name", "is_active") if data.get(field) is not None}
+                    if data.get("brand") is not None:
+                        changes["brand_id"] = catalog_record(Brand, data["brand"], "Brand", db).id
+                    if data.get("category") is not None:
+                        changes["category_id"] = catalog_record(ProductCategory, data["category"], "Category", db).id
+                    before = {field: getattr(product, field) for field in changes}
                     for field, value in changes.items(): setattr(product, field, value)
                     if changes: record_audit(db, actor_id=current_user.id, entity_type="product", entity_id=product.id, action="UPDATED", before=before, after=changes)
                 else: raise ValueError(f"Product {data['code']} now conflicts with an existing record")
                 if data.get("duration_days") is not None:
-                    rule = ProductRepurchaseRule(product_id=product.id, duration_days=data["duration_days"], alert_days=data["alert_days"], effective_from=date.fromisoformat(data["effective_from"]), medical_approval_reference=data["medical_approval_reference"], medical_approved_by=data["medical_approved_by"], medical_approved_at=datetime.fromisoformat(data["medical_approved_at"]), created_by_user_id=current_user.id)
+                    rule = ProductRepurchaseRule(product_id=product.id, duration_days=data["duration_days"], alert_days=data["alert_days"], effective_from=date.fromisoformat(data["effective_from"]), created_by_user_id=current_user.id)
                     db.add(rule); db.flush(); record_audit(db, actor_id=current_user.id, entity_type="product_rule", entity_id=rule.id, action="CREATED", after={"product_id": product.id, "import_job_id": job.id})
         job.state = "COMMITTED"; job.committed_at = datetime.now(timezone.utc)
         record_audit(db, actor_id=current_user.id, entity_type="import_job", entity_id=job.id, action="COMMITTED", after={"total_rows": job.total_rows})
