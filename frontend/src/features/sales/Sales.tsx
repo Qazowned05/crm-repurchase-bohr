@@ -45,13 +45,16 @@ export function Sales({ user }: { user: User }) {
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
   const [channel, setChannel] = useState("TV");
   const [error, setError] = useState("");
+  const [filters, setFilters] = useState({ q: "", product_id: "", status: "" });
   const advisor = user.role === "ASESOR";
-  const load = async (page = salesPage.page) => {
+  const load = async (page = salesPage.page, active = filters) => {
+    const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+    Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
     const [customerRows, productRows, saleRows, advisorMetrics] = await Promise.all([
       api<Paged<Customer> | Customer[]>("/customers?page=1&page_size=200"),
       api<Paged<Product> | Product[]>("/products?page=1&page_size=200"),
-      api<Paged<Sale> | Sale[]>(`/sales?page=${page}&page_size=${PAGE_SIZE}`),
-      advisor ? api<AdvisorSalesMetrics>("/sales/me/metrics") : Promise.resolve(null),
+      api<Paged<Sale> | Sale[]>(`/sales?${query}`),
+      advisor ? api<AdvisorSalesMetrics>(`/sales/me/metrics?${query}`) : Promise.resolve(null),
     ]);
     setCustomers(asPaged(customerRows).items);
     setProducts(asPaged(productRows).items.filter((product) => product.is_active));
@@ -161,6 +164,73 @@ export function Sales({ user }: { user: User }) {
           />
         </section>
       )}
+      <section className="panel filters">
+        <div className="panel-heading">
+          <div>
+            <h2>Filtros</h2>
+            <p>Busca ventas por cliente, producto o estado.</p>
+          </div>
+          <button
+            className="secondary"
+            onClick={() => {
+              const reset = { q: "", product_id: "", status: "" };
+              setFilters(reset);
+              load(1, reset).catch(() => setError("No fue posible actualizar las ventas."));
+            }}
+          >
+            Limpiar
+          </button>
+        </div>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            load(1).catch(() => setError("No fue posible actualizar las ventas."));
+          }}
+        >
+          <div className="filter-grid">
+            <label>
+              Cliente
+              <input
+                placeholder="DNI, nombre, teléfono o correo"
+                value={filters.q}
+                onChange={(event) => setFilters((value) => ({ ...value, q: event.target.value }))}
+              />
+            </label>
+            <label>
+              Producto
+              <select
+                value={filters.product_id}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, product_id: event.target.value }))
+                }
+              >
+                <option value="">Todos los productos</option>
+                {products.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {product.name} ({product.code})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Estado
+              <select
+                value={filters.status}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, status: event.target.value }))
+                }
+              >
+                <option value="">Todos los estados</option>
+                <option value="CONFIRMADA">Confirmada</option>
+                <option value="PENDIENTE_REVISION_DUPLICADO">Pendiente de revisión</option>
+                <option value="ANULADA">Anulada</option>
+                <option value="RECHAZADA_DUPLICADO">Rechazada</option>
+              </select>
+            </label>
+            <button>Aplicar filtros</button>
+          </div>
+        </form>
+      </section>
       <section className="panel sales-history">
         <div className="panel-heading">
           <div>

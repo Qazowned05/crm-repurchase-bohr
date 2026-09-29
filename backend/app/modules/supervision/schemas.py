@@ -51,6 +51,9 @@ class RecoveryAlertResponse(BaseModel):
     product_id: str
     product_code: str
     product_name: str
+    assigned_advisor_id: str | None = None
+    assigned_advisor_name: str | None = None
+    assigned_advisor_email: str | None = None
 
 
 class RecoveryCustomerResponse(BaseModel):

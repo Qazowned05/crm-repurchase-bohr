@@ -36,6 +36,7 @@ export type Product = {
   category_id: string;
   brand_name: string;
   category_name: string;
+  unit_price: string;
   is_active: boolean;
 };
 export type RepurchaseItem = {
@@ -85,6 +86,9 @@ export type Alert = {
   seller_advisor_id?: string | null;
   seller_advisor_name?: string | null;
   seller_advisor_email?: string | null;
+  alert_type?: "AUTOMATICA" | "REASIGNADA" | "SEGUIMIENTO" | null;
+  assignment_reason?: string | null;
+  assigned_at?: string | null;
 };
 export type ContactAttempt = {
   id: string;
@@ -125,6 +129,9 @@ export type RecoveryAlert = Alert & {
   product_name: string;
   latest_contact_typification?: string | null;
   latest_contact_date?: string | null;
+  assigned_advisor_id?: string | null;
+  assigned_advisor_name?: string | null;
+  assigned_advisor_email?: string | null;
 };
 export type RecoveryCustomer = {
   customer_id: string;

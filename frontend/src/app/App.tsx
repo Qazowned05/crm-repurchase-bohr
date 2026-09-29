@@ -28,7 +28,15 @@ export function App() {
       .finally(() => setReady(true));
   }, []);
   if (!ready) return <main className="loading">Cargando CRM...</main>;
-  if (!user) return <Login onLogin={setUser} />;
+  if (!user)
+    return (
+      <Login
+        onLogin={(nextUser) => {
+          setUser(nextUser);
+          setView("dashboard");
+        }}
+      />
+    );
   const supervisor = user.role !== "ASESOR";
   const nav: Array<[View, string]> = [
     ["dashboard", "Resumen"],
@@ -51,7 +59,11 @@ export function App() {
     ) : view === "alert-register" ? (
       <AlertRegister />
     ) : view === "recovery" ? (
-      <RecoveryQueue />
+      supervisor ? (
+        <RecoveryQueue />
+      ) : (
+        <Dashboard user={user} />
+      )
     ) : view === "configuration" ? (
       <Configuration />
     ) : (
@@ -82,6 +94,7 @@ export function App() {
             onClick={() => {
               clearToken();
               setUser(null);
+              setView("dashboard");
             }}
           >
             Cerrar sesión

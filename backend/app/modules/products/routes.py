@@ -33,7 +33,7 @@ def active_catalog_record(model: type[Brand] | type[ProductCategory], record_id:
 def product_response(product: Product) -> dict:
     return {"id": product.id, "code": product.code, "name": product.name, "brand_id": product.brand_id,
             "category_id": product.category_id, "brand_name": product.brand.name,
-            "category_name": product.category.name, "is_active": product.is_active,
+             "category_name": product.category.name, "unit_price": product.unit_price, "is_active": product.is_active,
             "created_at": product.created_at, "updated_at": product.updated_at}
 
 
@@ -60,7 +60,7 @@ def create_product(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Product code already exists")
     active_catalog_record(Brand, payload.brand_id, "brand", db)
     active_catalog_record(ProductCategory, payload.category_id, "product category", db)
-    product = Product(code=payload.code, name=payload.name.strip(), brand_id=payload.brand_id, category_id=payload.category_id)
+    product = Product(code=payload.code, name=payload.name.strip(), brand_id=payload.brand_id, category_id=payload.category_id, unit_price=payload.unit_price)
     db.add(product)
     db.flush()
     record_audit(

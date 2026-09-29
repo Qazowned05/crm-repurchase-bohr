@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -116,6 +116,9 @@ def recovery_queue(
     typification_id: str | None = None,
     min_days_overdue: int | None = Query(default=None, ge=0),
     max_days_overdue: int | None = Query(default=None, ge=0),
+    q: str | None = None,
+    product_id: str | None = None,
+    alert_status: str | None = Query(default=None, alias="status"),
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")),
@@ -143,6 +146,16 @@ def recovery_queue(
         query = query.where(Alert.alert_date <= today - timedelta(days=min_days_overdue))
     if max_days_overdue is not None:
         query = query.where(Alert.alert_date >= today - timedelta(days=max_days_overdue))
+    if q:
+        term = f"%{q.strip()}%"
+        query = query.where(or_(
+            Customer.dni.ilike(term), Customer.first_names.ilike(term), Customer.last_names.ilike(term),
+            Customer.phone.ilike(term), Customer.email.ilike(term),
+        ))
+    if product_id:
+        query = query.where(Product.id == product_id)
+    if alert_status:
+        query = query.where(Alert.status == alert_status)
     rows = db.execute(query).all()
     alert_ids = [alert.id for alert, *_ in rows]
     latest_attempts: dict[str, AlertContactAttempt] = {}
@@ -151,6 +164,7 @@ def recovery_queue(
             latest_attempts.setdefault(attempt.alert_id, attempt)
     grouped: dict[str, dict] = {}
     for alert, sale, item, customer, product in rows:
+        assigned_advisor = db.get(User, alert.assigned_advisor_id) if alert.assigned_advisor_id else None
         customer_row = grouped.setdefault(customer.id, {
             "customer_id": customer.id, "dni": customer.dni, "first_names": customer.first_names,
             "last_names": customer.last_names, "phone": customer.phone, "alerts": [],
@@ -159,6 +173,9 @@ def recovery_queue(
             "id": alert.id, "status": alert.status, "alert_date": alert.alert_date,
             "expected_repurchase_date": alert.expected_repurchase_date, "attempts_count": alert.attempts_count,
             "next_action_date": alert.next_action_date, "last_contact_at": alert.last_contact_at,
+            "assigned_advisor_id": alert.assigned_advisor_id,
+            "assigned_advisor_name": assigned_advisor.full_name if assigned_advisor else None,
+            "assigned_advisor_email": assigned_advisor.email if assigned_advisor else None,
             "latest_contact_typification": latest_attempts[alert.id].result if alert.id in latest_attempts else None,
             "latest_contact_date": latest_attempts[alert.id].contacted_at if alert.id in latest_attempts else None,
             "sale_id": sale.id, "sale_date": sale.sale_date, "product_id": product.id,
@@ -176,8 +193,7 @@ def assign_recovery_alert(alert_id: str, payload: AssignmentCreate, current_user
     if alert.status not in {"PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA", "VENCIDO_NO_GESTIONADO"}:
         raise HTTPException(status_code=409, detail="Only recoverable alerts can be assigned")
     record_alert_assignment(alert, payload.assigned_advisor_id, payload.reason.strip(), current_user.id, db)
-    if alert.status == "VENCIDO_NO_GESTIONADO":
-        alert.status, alert.closed_at = "PENDIENTE", None
+    alert.status, alert.closed_at = "REASIGNADO", None
     db.commit()
     db.refresh(alert)
     return alert_response(alert, db)
@@ -202,8 +218,7 @@ def bulk_assign_recovery_alerts(
     reason = payload.reason.strip()
     for alert in alerts:
         record_alert_assignment(alert, payload.assigned_advisor_id, reason, current_user.id, db)
-        if alert.status == "VENCIDO_NO_GESTIONADO":
-            alert.status, alert.closed_at = "PENDIENTE", None
+        alert.status, alert.closed_at = "REASIGNADO", None
     db.commit()
     return {"assigned_advisor_id": payload.assigned_advisor_id, "assigned_alert_ids": payload.alert_ids, "count": len(alerts)}
 

@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -17,7 +16,6 @@ class ContactAttemptCreate(BaseModel):
 class RepurchaseItemCreate(BaseModel):
     product_id: str
     quantity: int = Field(gt=0, le=100000)
-    unit_price: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
 
 
 class AlertRepurchaseCreate(BaseModel):
@@ -66,6 +64,9 @@ class AlertResponse(BaseModel):
     seller_advisor_id: str | None = None
     seller_advisor_name: str | None = None
     seller_advisor_email: str | None = None
+    alert_type: str | None = None
+    assignment_reason: str | None = None
+    assigned_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

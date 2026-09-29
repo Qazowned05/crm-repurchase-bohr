@@ -4,6 +4,7 @@ import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { api } from "../../services/api";
 import type {
   Paged,
+  Product,
   RecoveryAlert,
   RecoveryCustomer,
   TypificationTree,
@@ -32,6 +33,7 @@ export function RecoveryQueue() {
   });
   const [advisors, setAdvisors] = useState<User[]>([]);
   const [tree, setTree] = useState<TypificationTree[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [selected, setSelected] = useState<RecoveryAlert | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -39,6 +41,9 @@ export function RecoveryQueue() {
     typification_id: "",
     min_days_overdue: "",
     max_days_overdue: "",
+    q: "",
+    product_id: "",
+    status: "",
   });
   const [error, setError] = useState("");
   const load = (page = data.page, active = filters) => {
@@ -60,6 +65,9 @@ export function RecoveryQueue() {
       .catch(() => {});
     api<TypificationTree[]>("/configuration/contact-typifications/tree")
       .then(setTree)
+      .catch(() => {});
+    api<Paged<Product> | Product[]>("/products?page=1&page_size=200")
+      .then((value) => setProducts(asPaged(value).items))
       .catch(() => {});
   }, []);
   const rows: QueueRow[] = data.items.flatMap((customer) =>
@@ -100,7 +108,14 @@ export function RecoveryQueue() {
           <button
             className="secondary"
             onClick={() => {
-              const reset = { typification_id: "", min_days_overdue: "", max_days_overdue: "" };
+              const reset = {
+                typification_id: "",
+                min_days_overdue: "",
+                max_days_overdue: "",
+                q: "",
+                product_id: "",
+                status: "",
+              };
               setFilters(reset);
               load(1, reset).catch(() => setError("No fue posible actualizar la cola."));
             }}
@@ -120,6 +135,45 @@ export function RecoveryQueue() {
           }}
         >
           <div className="filter-grid">
+            <label>
+              Cliente
+              <input
+                placeholder="DNI, nombre, teléfono o correo"
+                value={filters.q}
+                onChange={(event) => setFilters((value) => ({ ...value, q: event.target.value }))}
+              />
+            </label>
+            <label>
+              Producto
+              <select
+                value={filters.product_id}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, product_id: event.target.value }))
+                }
+              >
+                <option value="">Todos los productos</option>
+                {products.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {product.name} ({product.code})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Estado
+              <select
+                value={filters.status}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, status: event.target.value }))
+                }
+              >
+                <option value="">Todos los estados</option>
+                <option value="VENCIDO_NO_GESTIONADO">Vencida</option>
+                <option value="REPROGRAMADO">Reprogramada</option>
+                <option value="PENDIENTE">Pendiente</option>
+                <option value="SIN_RESPUESTA">Sin respuesta</option>
+              </select>
+            </label>
             <label>
               Última tipificación
               <select

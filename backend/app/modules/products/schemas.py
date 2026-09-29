@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -8,6 +9,7 @@ class ProductCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
     brand_id: str
     category_id: str
+    unit_price: Decimal = Field(default=Decimal("1.00"), gt=0, max_digits=12, decimal_places=2)
 
     @field_validator("code")
     @classmethod
@@ -20,6 +22,7 @@ class ProductUpdate(BaseModel):
     brand_id: str | None = None
     category_id: str | None = None
     is_active: bool | None = None
+    unit_price: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
 
 
 class RuleCreate(BaseModel):
@@ -59,6 +62,7 @@ class ProductResponse(BaseModel):
     category_id: str
     brand_name: str
     category_name: str
+    unit_price: Decimal
     is_active: bool
     created_at: datetime
     updated_at: datetime

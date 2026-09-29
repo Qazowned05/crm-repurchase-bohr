@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import case, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,6 +34,29 @@ def alert_or_404(alert_id: str, db: Session) -> Alert:
 def assert_alert_access(alert: Alert, user: User) -> None:
     if user.role == "ASESOR" and alert.assigned_advisor_id != user.id:
         raise HTTPException(status_code=403, detail="You can only manage your assigned alerts")
+
+
+def apply_alert_filters(query, q: str | None, product_id: str | None, alert_status: str | None, alert_type: str | None):
+    if q:
+        term = f"%{q.strip()}%"
+        customer_ids = select(Customer.id).where(or_(
+            Customer.dni.ilike(term), Customer.first_names.ilike(term), Customer.last_names.ilike(term),
+            Customer.phone.ilike(term), Customer.email.ilike(term),
+        ))
+        query = query.where(Alert.sale_item_id.in_(
+            select(SaleItem.id).join(Sale, Sale.id == SaleItem.sale_id).where(Sale.customer_id.in_(customer_ids))
+        ))
+    if product_id:
+        query = query.where(Alert.sale_item_id.in_(select(SaleItem.id).where(SaleItem.product_id == product_id)))
+    if alert_status:
+        query = query.where(Alert.status == alert_status)
+    if alert_type == "AUTOMATICA":
+        query = query.where(Alert.status.not_in({"REASIGNADO", "REPROGRAMADO"}), Alert.next_action_date.is_(None))
+    elif alert_type == "REASIGNADA":
+        query = query.where(Alert.status == "REASIGNADO")
+    elif alert_type == "SEGUIMIENTO":
+        query = query.where(or_(Alert.status == "REPROGRAMADO", Alert.next_action_date.is_not(None)))
+    return query
 
 
 @router.post("/{alert_id}/repurchase", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
@@ -99,7 +122,7 @@ def register_repurchase(
             sale_id=sale.id,
             product_id=payload_item.product_id,
             quantity=payload_item.quantity,
-            unit_price=payload_item.unit_price,
+            unit_price=products[payload_item.product_id].unit_price,
             rule_duration_days=rule.duration_days,
             rule_alert_days=rule.alert_days,
             expected_repurchase_date=payload.sale_date + timedelta(days=rule.duration_days),
@@ -117,7 +140,12 @@ def register_repurchase(
 
 
 @router.get("/inbox")
-def inbox(page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict] | dict:
+def inbox(
+    q: str | None = None, product_id: str | None = None, alert_status: str | None = Query(default=None, alias="status"),
+    alert_type: str | None = Query(default=None, pattern="^(AUTOMATICA|REASIGNADA|SEGUIMIENTO)$"),
+    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+) -> list[dict] | dict:
     today = date.today()
     # Catch up after a restart or a system date change before reading the inbox.
     run_alert_generation(today, db)
@@ -131,6 +159,7 @@ def inbox(page: int | None = Query(default=None, ge=1), page_size: int | None = 
     query = (advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()).order_by(priority, Alert.next_action_date, Alert.alert_date)
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
+    query = apply_alert_filters(query, q, product_id, alert_status, alert_type)
     return paginate_items([alert_response(alert, db) for alert in db.scalars(query)], page, page_size)
 
 
@@ -139,6 +168,8 @@ def managed_register(
     date_from: date | None = None,
     date_to: date | None = None,
     state: str | None = Query(default=None, pattern="^(open-follow-up|closed)$"),
+    q: str | None = None, product_id: str | None = None, alert_status: str | None = Query(default=None, alias="status"),
+    alert_type: str | None = Query(default=None, pattern="^(AUTOMATICA|REASIGNADA|SEGUIMIENTO)$"),
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -157,6 +188,7 @@ def managed_register(
         query = query.where(Alert.status.not_in(FINAL_STATUSES))
     elif state == "closed":
         query = query.where(Alert.status.in_(FINAL_STATUSES))
+    query = apply_alert_filters(query, q, product_id, alert_status, alert_type)
     rows = [managed_alert_response(alert, db) for alert in db.scalars(query.order_by(Alert.alert_date.desc(), Alert.created_at.desc()))]
     return paginate_items(rows, page, page_size)
 

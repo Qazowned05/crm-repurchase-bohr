@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -155,6 +155,7 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
         rule = rules[payload_item.product_id]
         db.add(SaleItem(
             sale_id=sale.id, product_id=payload_item.product_id, quantity=payload_item.quantity,
+            unit_price=products[payload_item.product_id].unit_price,
             rule_duration_days=rule.duration_days, rule_alert_days=rule.alert_days,
             expected_repurchase_date=payload.sale_date + timedelta(days=rule.duration_days),
         ))
@@ -179,6 +180,7 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
 @router.get("")
 def list_sales(
     customer_id: str | None = None, sale_date: date | None = None, sale_status: str | None = Query(default=None, alias="status"),
+    q: str | None = None, product_id: str | None = None,
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
 ) -> list[dict] | dict:
@@ -191,12 +193,22 @@ def list_sales(
         query = query.where(Sale.sale_date == sale_date)
     if sale_status:
         query = query.where(Sale.status == sale_status)
+    if q:
+        term = f"%{q.strip()}%"
+        customer_ids = select(Customer.id).where(or_(
+            Customer.dni.ilike(term), Customer.first_names.ilike(term), Customer.last_names.ilike(term),
+            Customer.phone.ilike(term), Customer.email.ilike(term),
+        ))
+        query = query.where(Sale.customer_id.in_(customer_ids))
+    if product_id:
+        query = query.where(Sale.id.in_(select(SaleItem.sale_id).where(SaleItem.product_id == product_id)))
     return paginate_items([sale_response(sale, db) for sale in db.scalars(query)], page, page_size)
 
 
 @router.get("/me/metrics", response_model=AdvisorSalesMetricsResponse)
 def advisor_sales_metrics(
     date_from: date | None = None, date_to: date | None = None,
+    q: str | None = None, product_id: str | None = None,
     current_user: User = Depends(require_roles("ASESOR")), db: Session = Depends(get_db),
 ) -> dict[str, int]:
     query = (
@@ -213,6 +225,15 @@ def advisor_sales_metrics(
         query = query.where(Sale.sale_date >= date_from)
     if date_to:
         query = query.where(Sale.sale_date <= date_to)
+    if q:
+        term = f"%{q.strip()}%"
+        customer_ids = select(Customer.id).where(or_(
+            Customer.dni.ilike(term), Customer.first_names.ilike(term), Customer.last_names.ilike(term),
+            Customer.phone.ilike(term), Customer.email.ilike(term),
+        ))
+        query = query.where(Sale.customer_id.in_(customer_ids))
+    if product_id:
+        query = query.where(SaleItem.product_id == product_id)
     confirmed_sales, confirmed_items, repurchase_sales, repurchase_items = db.execute(query).one()
     return {
         "confirmed_sales": confirmed_sales,
@@ -257,6 +278,7 @@ def update_sale(
             rule = rules[payload_item["product_id"]]
             db.add(SaleItem(
                 sale_id=sale.id, product_id=payload_item["product_id"], quantity=payload_item["quantity"],
+                unit_price=products[payload_item["product_id"]].unit_price,
                 rule_duration_days=rule.duration_days, rule_alert_days=rule.alert_days,
                 expected_repurchase_date=effective_date + timedelta(days=rule.duration_days),
             ))

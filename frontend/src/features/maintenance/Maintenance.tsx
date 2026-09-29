@@ -297,6 +297,7 @@ function ProductCreateModal({
           name: data.name,
           brand_id: data.brand_id,
           category_id: data.category_id,
+          unit_price: data.unit_price,
         }),
       });
       try {
@@ -354,6 +355,10 @@ function ProductCreateModal({
               ))}
             </select>
           </label>
+          <label>
+            Precio unitario
+            <input name="unit_price" type="number" min="0.01" step="0.01" required />
+          </label>
         </div>
         <h3 className="modal-section-title">Regla inicial de recompra</h3>
         <RuleFields />
@@ -407,6 +412,7 @@ function ProductEditModal({
           name: data.name,
           brand_id: data.brand_id,
           category_id: data.category_id,
+          unit_price: data.unit_price,
           is_active: data.is_active === "on",
         }),
       });
@@ -448,6 +454,10 @@ function ProductEditModal({
                 </option>
               ))}
             </select>
+          </label>
+          <label>
+            Precio unitario
+            <input name="unit_price" type="number" min="0.01" step="0.01" required defaultValue={product.unit_price} />
           </label>
           <label>
             Activo

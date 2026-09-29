@@ -41,10 +41,11 @@ export function Dashboard({ user }: { user: User }) {
   const [extraRepurchaseLines, setExtraRepurchaseLines] = useState<ExtraRepurchaseLine[]>([]);
   const [managementError, setManagementError] = useState("");
   const [managementSuccess, setManagementSuccess] = useState("");
+  const [alertError, setAlertError] = useState("");
   useEffect(() => {
     api<Paged<Alert> | Alert[]>(`/alerts/inbox?page=1&page_size=${PAGE_SIZE}`)
       .then((value) => setAlertPage(asPaged(value)))
-      .catch(() => {});
+      .catch(() => setAlertError("No es posible mostrar las alertas en este momento."));
     if (user.role !== "ASESOR") {
       api<Metrics>("/reports/metrics")
         .then(setMetrics)
@@ -264,12 +265,18 @@ export function Dashboard({ user }: { user: User }) {
                     {alert.product_name || alert.product_code || "Producto"} · vence{" "}
                     {alert.expected_repurchase_date}
                   </small>
+                  <small>
+                    {alert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
+                    {alert.assignment_reason ? ` · ${alert.assignment_reason}` : ""}
+                    {alert.next_action_date ? ` · Próxima acción: ${alert.next_action_date}` : ""}
+                  </small>
                 </span>
                 <span className="status warning">{alert.status.replaceAll("_", " ")}</span>
                 <span>Gestionar</span>
               </button>
             ))}
             {!alerts.length && <p>No hay alertas activas.</p>}
+            {alertError && <p className="form-error">{alertError}</p>}
           </div>
           <Pagination data={alertPage} onPageChange={(page) => loadAlerts(page).catch(() => {})} />
         </section>
@@ -345,6 +352,20 @@ export function Dashboard({ user }: { user: User }) {
             <p>
               <b>Fecha prevista:</b> {selectedAlert.expected_repurchase_date}
             </p>
+            <p>
+              <b>Tipo de alerta:</b>{" "}
+              {selectedAlert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
+            </p>
+            {selectedAlert.assignment_reason && (
+              <p>
+                <b>Motivo de asignación:</b> {selectedAlert.assignment_reason}
+              </p>
+            )}
+            {selectedAlert.next_action_date && (
+              <p>
+                <b>Próxima acción:</b> {selectedAlert.next_action_date}
+              </p>
+            )}
           </div>
           <form onSubmit={manageAlert}>
             <fieldset className="management-mode-switch">

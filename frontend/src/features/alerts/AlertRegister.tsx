@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Modal } from "../../components/Modal";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { api } from "../../services/api";
-import type { ContactAttempt, ManagedAlert, Paged } from "../../services/types";
+import type { ContactAttempt, ManagedAlert, Paged, Product } from "../../services/types";
 
 const closedStatuses = new Set([
   "RECOMPRA_LOGRADA",
@@ -51,7 +51,7 @@ function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => 
         <div>
           <span>Estado</span>
           <b className={closed ? "closed-text" : "pending-text"}>
-            {closed ? "Cerrada" : "Seguimiento pendiente"}
+            {closed ? "Cerrada" : statusLabel(alert.status)}
           </b>
           <small>{statusLabel(alert.status)}</small>
         </div>
@@ -71,6 +71,10 @@ function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => 
           <b>Próxima acción:</b> {formatDate(alert.next_action_date)}
         </p>
       )}
+      <p className="follow-up-note">
+        <b>Tipo de alerta:</b> {alert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
+        {alert.assignment_reason ? ` · Motivo de asignación: ${alert.assignment_reason}` : ""}
+      </p>
       <h3 className="history-title">Historial de gestión</h3>
       {alert.contact_attempts.length ? (
         <ol className="management-history">
@@ -111,7 +115,16 @@ export function AlertRegister() {
     pages: 0,
   });
   const [selected, setSelected] = useState<ManagedAlert | null>(null);
-  const [filters, setFilters] = useState({ date_from: "", date_to: "", state: "" });
+  const [products, setProducts] = useState<Product[]>([]);
+  const [filters, setFilters] = useState({
+    date_from: "",
+    date_to: "",
+    state: "",
+    q: "",
+    product_id: "",
+    status: "",
+    alert_type: "",
+  });
   const [error, setError] = useState("");
   const load = (page = data.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
@@ -122,6 +135,9 @@ export function AlertRegister() {
   };
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar el registro de alertas."));
+    api<Paged<Product> | Product[]>("/products?page=1&page_size=200")
+      .then((value) => setProducts(asPaged(value).items))
+      .catch(() => {});
   }, []);
   return (
     <>
@@ -145,7 +161,15 @@ export function AlertRegister() {
           <button
             className="secondary"
             onClick={() => {
-              const reset = { date_from: "", date_to: "", state: "" };
+              const reset = {
+                date_from: "",
+                date_to: "",
+                state: "",
+                q: "",
+                product_id: "",
+                status: "",
+                alert_type: "",
+              };
               setFilters(reset);
               setError("");
               load(1, reset).catch((reason) =>
@@ -172,6 +196,30 @@ export function AlertRegister() {
           }}
         >
           <div className="register-filter-grid">
+            <label>
+              Cliente
+              <input
+                placeholder="DNI, nombre, teléfono o correo"
+                value={filters.q}
+                onChange={(event) => setFilters((value) => ({ ...value, q: event.target.value }))}
+              />
+            </label>
+            <label>
+              Producto
+              <select
+                value={filters.product_id}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, product_id: event.target.value }))
+                }
+              >
+                <option value="">Todos los productos</option>
+                {products.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {product.name} ({product.code})
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Desde
               <input
@@ -203,6 +251,36 @@ export function AlertRegister() {
                 <option value="">Todos los estados</option>
                 <option value="open-follow-up">Seguimiento pendiente</option>
                 <option value="closed">Cerradas</option>
+              </select>
+            </label>
+            <label>
+              Estado de alerta
+              <select
+                value={filters.status}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, status: event.target.value }))
+                }
+              >
+                <option value="">Todos</option>
+                <option value="PENDIENTE">Pendiente</option>
+                <option value="REASIGNADO">Reasignada</option>
+                <option value="REPROGRAMADO">Reprogramada</option>
+                <option value="SIN_RESPUESTA">Sin respuesta</option>
+                <option value="VENCIDO_NO_GESTIONADO">Vencida</option>
+              </select>
+            </label>
+            <label>
+              Tipo de alerta
+              <select
+                value={filters.alert_type}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, alert_type: event.target.value }))
+                }
+              >
+                <option value="">Todos los tipos</option>
+                <option value="AUTOMATICA">Automática</option>
+                <option value="REASIGNADA">Reasignada</option>
+                <option value="SEGUIMIENTO">Seguimiento</option>
               </select>
             </label>
             <button>Aplicar filtros</button>
@@ -250,7 +328,7 @@ export function AlertRegister() {
                     </td>
                     <td>
                       <span className={`status ${closed ? "success" : "warning"}`}>
-                        {closed ? "Cerrada" : "Seguimiento pendiente"}
+                        {closed ? "Cerrada" : statusLabel(alert.status)}
                       </span>
                       <span className="table-detail">
                         {closed
