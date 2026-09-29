@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from pydantic import BaseModel
 
@@ -51,3 +52,11 @@ class MetricsResponse(BaseModel):
     repurchase_denominator: int
     advisor_ranking: list[dict]
     attention_typifications: list[dict]
+    total_revenue: Decimal
+    regular_revenue: Decimal
+    repurchase_revenue: Decimal
+    total_units_sold: int
+    confirmed_sales: int
+    average_ticket: Decimal
+    top_products_by_units: list[dict]
+    top_products_by_revenue: list[dict]

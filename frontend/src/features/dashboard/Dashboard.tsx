@@ -1,4 +1,18 @@
 import { useEffect, useState } from "react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  LabelList,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { api } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { Modal } from "../../components/Modal";
@@ -16,6 +30,23 @@ import type {
 
 type RepurchaseSelection = "ORIGINAL" | "OTHER" | "BOTH";
 type ExtraRepurchaseLine = RepurchaseItem;
+
+function alertStatusClass(status: string) {
+  return `status alert-status-${status.toLowerCase().replaceAll("_", "-")}`;
+}
+
+function formatCurrency(value: string | number) {
+  return new Intl.NumberFormat("es-PE", {
+    style: "currency",
+    currency: "PEN",
+    minimumFractionDigits: 2,
+  }).format(Number(value));
+}
+
+function daysSince(date?: string | null) {
+  if (!date) return "-";
+  return Math.max(0, Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000));
+}
 
 export function Dashboard({ user }: { user: User }) {
   const [alertPage, setAlertPage] = useState<Paged<Alert>>({
@@ -36,7 +67,6 @@ export function Dashboard({ user }: { user: User }) {
   const [originalRepurchase, setOriginalRepurchase] = useState<RepurchaseItem>({
     product_id: "",
     quantity: 1,
-    unit_price: 0,
   });
   const [extraRepurchaseLines, setExtraRepurchaseLines] = useState<ExtraRepurchaseLine[]>([]);
   const [managementError, setManagementError] = useState("");
@@ -61,6 +91,11 @@ export function Dashboard({ user }: { user: User }) {
     }
   }, [user.role]);
   const alerts = alertPage.items;
+  const alertsByCustomer = new Map<string, Alert[]>();
+  alerts.forEach((alert) => {
+    const customerKey = alert.customer_id || alert.customer_dni || alert.id;
+    alertsByCustomer.set(customerKey, [...(alertsByCustomer.get(customerKey) || []), alert]);
+  });
   const loadAlerts = (page: number) =>
     api<Paged<Alert> | Alert[]>(`/alerts/inbox?page=${page}&page_size=${PAGE_SIZE}`).then((value) =>
       setAlertPage(asPaged(value, page)),
@@ -78,7 +113,7 @@ export function Dashboard({ user }: { user: User }) {
     setChildTypificationId("");
     setManagementMode("ATTEMPT");
     setRepurchaseSelection("ORIGINAL");
-    setOriginalRepurchase({ product_id: alert.product_id || "", quantity: 1, unit_price: 0 });
+    setOriginalRepurchase({ product_id: alert.product_id || "", quantity: 1 });
     setExtraRepurchaseLines([]);
     setSelectedAlert(alert);
     try {
@@ -111,10 +146,10 @@ export function Dashboard({ user }: { user: User }) {
         ];
         if (
           !items.length ||
-          items.some((item) => !item.product_id || item.quantity <= 0 || item.unit_price <= 0)
+          items.some((item) => !item.product_id || item.quantity <= 0)
         ) {
           setManagementError(
-            "Completa producto, cantidad y precio unitario para cada línea de recompra.",
+            "Completa producto y cantidad para cada línea de recompra.",
           );
           return;
         }
@@ -167,79 +202,115 @@ export function Dashboard({ user }: { user: User }) {
         <p>{new Intl.DateTimeFormat("es-PE", { dateStyle: "full" }).format(new Date())}</p>
       </div>
       {managementSuccess && <p className="success-message">{managementSuccess}</p>}
-      <section className="stats">
-        <StatCard
-          label="Alertas activas"
-          value={metrics ? metrics.alerts_considered : alertPage.total}
-        />
-        <StatCard
-          label={metrics ? "Gestionadas" : "Para hoy"}
-          value={
-            metrics
-              ? metrics.advisor_ranking.reduce(
-                  (total, advisor) => total + advisor.managed_alerts,
-                  0,
-                )
-              : alerts.filter((a) => a.next_action_date === new Date().toISOString().slice(0, 10))
-                  .length
-          }
-          accent="orange"
-        />
-        <StatCard
-          label="Atendidas"
-          value={
-            metrics
-              ? metrics.repurchase_denominator
-              : alerts.filter((a) => a.attempts_count > 0).length
-          }
-          accent="green"
-        />
-        <StatCard
-          label="Tasa de recompra"
-          value={metrics ? `${Math.round(metrics.repurchase_rate * 100)}%` : "-"}
-          accent="purple"
-        />
-      </section>
+      {user.role === "ASESOR" ? (
+        <section className="stats">
+          <StatCard label="Alertas activas" value={alertPage.total} />
+          <StatCard
+            label="Para hoy"
+            value={alerts.filter((a) => a.next_action_date === new Date().toISOString().slice(0, 10)).length}
+            accent="orange"
+          />
+          <StatCard label="Atendidas" value={alerts.filter((a) => a.attempts_count > 0).length} accent="green" />
+          <StatCard label="Tasa de recompra" value="-" accent="purple" />
+        </section>
+      ) : (
+        <section className="stats supervisor-stats">
+          <StatCard label="Facturación total" value={metrics ? formatCurrency(metrics.total_revenue) : "-"} accent="green" />
+          <StatCard label="Ingreso por recompra" value={metrics ? formatCurrency(metrics.repurchase_revenue) : "-"} accent="purple" />
+          <StatCard label="Unidades vendidas" value={metrics ? metrics.total_units_sold : "-"} />
+          <StatCard label="Ticket promedio" value={metrics ? formatCurrency(metrics.average_ticket) : "-"} accent="orange" />
+        </section>
+      )}
       {user.role !== "ASESOR" && (
-        <section className="dashboard-grid">
+        <section className="dashboard-grid supervisor-dashboard-grid">
           <article className="panel">
-            <h2>Tipificaciones de atención</h2>
-            <div className="bars">
-              {(metrics?.attention_typifications || []).map((item) => (
-                <i
-                  key={item.typification_id}
-                  title={`${item.typification_name}: ${item.attempts}`}
-                  style={{
-                    height: `${Math.max(8, (item.attempts / Math.max(...(metrics?.attention_typifications.map((x) => x.attempts) || [1]))) * 100)}%`,
-                  }}
-                />
-              ))}
-            </div>
-            <small>
-              {metrics?.attention_typifications
-                .map((item) => `${item.typification_name} (${item.attempts})`)
-                .join(" · ") || "Sin gestiones tipificadas"}
-            </small>
+            <h2>Top 4 por unidades vendidas</h2>
+            {metrics?.top_products_by_units.length ? (
+              <div className="product-chart">
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart layout="vertical" data={metrics.top_products_by_units} margin={{ top: 4, right: 32, left: 8, bottom: 0 }}>
+                    <CartesianGrid stroke="#dce5ec" horizontal={false} />
+                    <XAxis type="number" allowDecimals={false} hide />
+                    <YAxis dataKey="product_name" type="category" width={130} tick={{ fill: "#526b7d", fontSize: 11 }} />
+                    <Tooltip
+                      cursor={{ fill: "#f0f6fa" }}
+                      formatter={(value) => [`${value} uds.`, "Unidades"]}
+                    />
+                    <Bar dataKey="units" fill="#005a9c" radius={[0, 2, 2, 0]}>
+                      <LabelList dataKey="units" position="right" formatter={(value) => `${value} uds.`} fill="#29475e" fontSize={11} />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : <p>Sin ventas registradas.</p>}
           </article>
           <article className="panel">
-            <h2>Ventas por recompra</h2>
-            <div className="ring">
-              <b>{metrics ? `${Math.round(metrics.repurchase_rate * 100)}%` : "0%"}</b>
-            </div>
-            <p>Conversión de alertas atendidas</p>
+            <h2>Top 4 por facturación</h2>
+            {metrics?.top_products_by_revenue.length ? (
+              <div className="product-chart">
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart layout="vertical" data={metrics.top_products_by_revenue} margin={{ top: 4, right: 50, left: 8, bottom: 0 }}>
+                    <CartesianGrid stroke="#dce5ec" horizontal={false} />
+                    <XAxis type="number" hide />
+                    <YAxis dataKey="product_name" type="category" width={130} tick={{ fill: "#526b7d", fontSize: 11 }} />
+                    <Tooltip
+                      cursor={{ fill: "#edf7f2" }}
+                      formatter={(value) => [formatCurrency(Number(value)), "Facturación"]}
+                    />
+                    <Bar dataKey="revenue" fill="#00734d" radius={[0, 2, 2, 0]}>
+                      <LabelList dataKey="revenue" position="right" formatter={(value) => formatCurrency(Number(value))} fill="#29475e" fontSize={11} />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : <p>Sin ventas registradas.</p>}
           </article>
           <article className="panel advisors">
             <h2>Ranking de asesores</h2>
-            {metrics?.advisor_ranking.slice(0, 5).map((advisor) => (
-              <p key={advisor.advisor_id}>
-                <span className="avatar">{advisor.advisor_name[0]}</span>
-                {advisor.advisor_name}
-                <small>
-                  {advisor.confirmed_repurchases} recompras · {advisor.managed_alerts} gestionadas
-                </small>
-              </p>
-            ))}
-            {!metrics?.advisor_ranking.length && <p>No hay actividad de asesores en el periodo.</p>}
+            {metrics?.advisor_ranking.length ? (
+              <ol className="advisor-ranking">
+                {metrics.advisor_ranking.slice(0, 5).map((advisor, index) => (
+                  <li key={advisor.advisor_id}>
+                    <span className="ranking-position">{index + 1}</span>
+                    <span className="avatar">{advisor.advisor_name[0]}</span>
+                    <span className="ranking-advisor">
+                      <b>{advisor.advisor_name}</b>
+                      <small>{advisor.confirmed_repurchases} recompras · {advisor.managed_alerts} alertas gestionadas</small>
+                    </span>
+                    <b className="ranking-revenue">{formatCurrency(advisor.repurchase_revenue)}</b>
+                  </li>
+                ))}
+              </ol>
+            ) : <p>No hay actividad de asesores en el periodo.</p>}
+          </article>
+          <article className="panel revenue-comparison-panel">
+            <h2>Ingresos: ventas regulares vs recompras</h2>
+            {metrics ? (
+              <div className="product-chart">
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie
+                      data={[
+                        { name: "Ventas regulares", amount: Number(metrics.regular_revenue) },
+                        { name: "Recompras", amount: Number(metrics.repurchase_revenue) },
+                      ]}
+                      dataKey="amount"
+                      nameKey="name"
+                      cx="50%"
+                      cy="45%"
+                      innerRadius={48}
+                      outerRadius={76}
+                      paddingAngle={3}
+                    >
+                      <Cell fill="#005a9c" />
+                      <Cell fill="#00734d" />
+                    </Pie>
+                    <Tooltip formatter={(value) => [formatCurrency(Number(value)), "Ingresos"]} />
+                    <Legend verticalAlign="bottom" iconType="circle" formatter={(value) => <span className="pie-legend">{value}</span>} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            ) : <p>Sin ventas registradas.</p>}
           </article>
         </section>
       )}
@@ -255,26 +326,39 @@ export function Dashboard({ user }: { user: User }) {
             </span>
           </div>
           <div className="alert-list">
-            {alerts.map((alert) => (
-              <button className="alert-row" key={alert.id} onClick={() => openAlert(alert)}>
-                <span>
-                  <b>
-                    {alert.customer_first_names} {alert.customer_last_names}
-                  </b>
-                  <small>
-                    {alert.product_name || alert.product_code || "Producto"} · vence{" "}
-                    {alert.expected_repurchase_date}
-                  </small>
-                  <small>
-                    {alert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
-                    {alert.assignment_reason ? ` · ${alert.assignment_reason}` : ""}
-                    {alert.next_action_date ? ` · Próxima acción: ${alert.next_action_date}` : ""}
-                  </small>
-                </span>
-                <span className="status warning">{alert.status.replaceAll("_", " ")}</span>
-                <span>Gestionar</span>
-              </button>
-            ))}
+            {Array.from(alertsByCustomer.values()).map((customerAlerts) => {
+              const customer = customerAlerts[0];
+              return (
+                <section className="alert-customer-group" key={customer.customer_id || customer.id}>
+                  <header>
+                    <span>
+                      <b>
+                        {customer.customer_first_names} {customer.customer_last_names}
+                      </b>
+                      <small>{customer.customer_dni ? `DNI ${customer.customer_dni}` : ""}</small>
+                    </span>
+                    <small>
+                      {customerAlerts.length} {customerAlerts.length === 1 ? "alerta" : "alertas"}
+                    </small>
+                  </header>
+                  {customerAlerts.map((alert) => (
+                    <button className="alert-row" key={alert.id} onClick={() => openAlert(alert)}>
+                      <span>
+                        <b>{alert.product_name || alert.product_code || "Producto"}</b>
+                        <small>Vence {alert.expected_repurchase_date}</small>
+                        <small>
+                          {alert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
+                          {alert.assignment_reason ? ` · ${alert.assignment_reason}` : ""}
+                          {alert.next_action_date ? ` · Próxima acción: ${alert.next_action_date}` : ""}
+                        </small>
+                      </span>
+                      <span className={alertStatusClass(alert.status)}>{alert.status.replaceAll("_", " ")}</span>
+                      <span>Gestionar</span>
+                    </button>
+                  ))}
+                </section>
+              );
+            })}
             {!alerts.length && <p>No hay alertas activas.</p>}
             {alertError && <p className="form-error">{alertError}</p>}
           </div>
@@ -288,9 +372,11 @@ export function Dashboard({ user }: { user: User }) {
               <thead>
                 <tr>
                   <th>Fecha</th>
+                  <th>Cliente / producto</th>
                   <th>Estado</th>
                   <th>Intentos</th>
                   <th>Asignado</th>
+                  <th>Desde venta</th>
                 </tr>
               </thead>
               <tbody>
@@ -298,15 +384,20 @@ export function Dashboard({ user }: { user: User }) {
                   <tr key={a.id}>
                     <td>{a.expected_repurchase_date}</td>
                     <td>
-                      <span className="badge">{a.status.replaceAll("_", " ")}</span>
+                      <b>{[a.customer_first_names, a.customer_last_names].filter(Boolean).join(" ") || "Sin cliente"}</b>
+                      <span className="table-detail">{a.product_name || a.product_code || "Sin producto"}</span>
+                    </td>
+                    <td>
+                      <span className={alertStatusClass(a.status)}>{a.status.replaceAll("_", " ")}</span>
                     </td>
                     <td>{a.attempts_count}</td>
-                    <td>{a.assigned_advisor_id ? "Asesor asignado" : "Sin asignar"}</td>
+                    <td>{a.assigned_advisor_name || "Sin asignar"}</td>
+                    <td>{daysSince(a.original_sale_date)} días</td>
                   </tr>
                 ))}
                 {!alerts.length && (
                   <tr>
-                    <td colSpan={4}>No hay alertas activas.</td>
+                    <td colSpan={6}>No hay alertas activas.</td>
                   </tr>
                 )}
               </tbody>
@@ -399,6 +490,11 @@ export function Dashboard({ user }: { user: User }) {
                   Registra la venta confirmada. Esta acción cerrará la alerta y no requiere
                   tipificación.
                 </p>
+                {repurchaseSelection === "OTHER" && (
+                  <p className="repurchase-info-banner repurchase-recovery-note">
+                    La alerta del producto original quedará en recuperación para seguimiento posterior.
+                  </p>
+                )}
                 <fieldset className="repurchase-product-choice">
                   <legend>¿Qué compró?</legend>
                   <div>
@@ -469,22 +565,6 @@ export function Dashboard({ user }: { user: User }) {
                         required
                       />
                     </label>
-                    <label>
-                      Precio unitario
-                      <input
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        value={originalRepurchase.unit_price || ""}
-                        onChange={(event) =>
-                          setOriginalRepurchase((line) => ({
-                            ...line,
-                            unit_price: Number(event.target.value),
-                          }))
-                        }
-                        required
-                      />
-                    </label>
                   </section>
                 )}
                 {(repurchaseSelection === "OTHER" || repurchaseSelection === "BOTH") && (
@@ -500,7 +580,7 @@ export function Dashboard({ user }: { user: User }) {
                         onClick={() =>
                           setExtraRepurchaseLines((lines) => [
                             ...lines,
-                            { product_id: "", quantity: 1, unit_price: 0 },
+                            { product_id: "", quantity: 1 },
                           ])
                         }
                       >
@@ -554,25 +634,6 @@ export function Dashboard({ user }: { user: User }) {
                                 lines.map((item, lineIndex) =>
                                   lineIndex === index
                                     ? { ...item, quantity: Number(event.target.value) }
-                                    : item,
-                                ),
-                              )
-                            }
-                            required
-                          />
-                        </label>
-                        <label>
-                          Precio unitario
-                          <input
-                            type="number"
-                            min="0.01"
-                            step="0.01"
-                            value={line.unit_price || ""}
-                            onChange={(event) =>
-                              setExtraRepurchaseLines((lines) =>
-                                lines.map((item, lineIndex) =>
-                                  lineIndex === index
-                                    ? { ...item, unit_price: Number(event.target.value) }
                                     : item,
                                 ),
                               )

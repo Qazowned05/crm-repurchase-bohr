@@ -130,10 +130,15 @@ def register_repurchase(
     db.flush()
     product_ids = set(products)
     recompute_chain(customer.id, product_ids, db)
-    alert.status = "RECOMPRA_LOGRADA"
+    source_product_purchased = source_item.product_id in product_ids
+    alert.status = "RECOMPRA_LOGRADA" if source_product_purchased else "COMPRA_OTRO_PRODUCTO"
     alert.closed_at = datetime.now(timezone.utc)
-    alert.closure_reason = f"RECOMPRA_CONFIRMADA: venta {sale.id}"
-    record_audit(db, actor_id=current_user.id, entity_type="alert", entity_id=alert.id, action="REPURCHASE_ACHIEVED", after={"status": alert.status, "closure_reason": alert.closure_reason, "repurchase_sale_id": sale.id})
+    alert.closure_reason = (
+        f"RECOMPRA_CONFIRMADA: venta {sale.id}"
+        if source_product_purchased
+        else f"COMPRA_OTRO_PRODUCTO: venta {sale.id}"
+    )
+    record_audit(db, actor_id=current_user.id, entity_type="alert", entity_id=alert.id, action="REPURCHASE_ACHIEVED" if source_product_purchased else "OTHER_PRODUCT_PURCHASED", after={"status": alert.status, "closure_reason": alert.closure_reason, "repurchase_sale_id": sale.id})
     record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="CONFIRMED", after={"status": sale.status, "customer_id": customer.id, "source_alert_id": alert.id})
     db.commit()
     return sale_response(sale, db)
@@ -247,7 +252,7 @@ def add_attempt(alert_id: str, payload: ContactAttemptCreate, current_user: User
     alert.attempts_count += 1
     alert.last_contact_at = datetime.now(timezone.utc)
     alert.next_action_date = payload.next_action_date
-    if result in {"AUN_TIENE_PRODUCTO", "SOLICITA_SEGUIMIENTO"}:
+    if result in {"AUN_TIENE_PRODUCTO", "SOLICITA_SEGUIMIENTO"} or (typification and typification.requires_next_action):
         alert.status = "REPROGRAMADO"
     elif result == "SIN_RESPUESTA":
         alert.status = "SIN_RESPUESTA"

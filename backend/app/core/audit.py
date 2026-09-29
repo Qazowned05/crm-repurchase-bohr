@@ -1,5 +1,6 @@
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditLog
@@ -21,7 +22,7 @@ def record_audit(
             entity_type=entity_type,
             entity_id=entity_id,
             action=action,
-            before_data=before,
-            after_data=after,
+            before_data=jsonable_encoder(before),
+            after_data=jsonable_encoder(after),
         )
     )

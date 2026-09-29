@@ -18,3 +18,7 @@ docker compose logs --since=15m backend db
 ```
 
 Deployment, HTTPS reverse-proxy prerequisites for the API, backup/restore drills, monitoring, and release acceptance are documented in [RUNBOOK.md](RUNBOOK.md). The production deployment template is `compose.production.yml`; it requires protected environment values and is intentionally separate from the local development stack.
+
+## Flujo operativo
+
+El flujo integral de ventas, alertas, seguimiento, recuperación, supervisión y los avances entregados está documentado en [docs/WORKFLOW.md](docs/WORKFLOW.md).

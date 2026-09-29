@@ -10,8 +10,7 @@ from app.core.pagination import paginate_items
 from app.dependencies import require_roles
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.alerts.schemas import AlertResponse
-from app.modules.alerts.service import active_alerts_query, alert_response
-from app.modules.alerts.service import recovery_alerts_query
+from app.modules.alerts.service import RECOVERABLE_FINAL_STATUSES, active_alerts_query, alert_response, recovery_alerts_query
 from app.modules.auth.models import User
 from app.modules.configuration.models import ContactTypification
 from app.modules.customers.models import Customer
@@ -116,6 +115,8 @@ def recovery_queue(
     typification_id: str | None = None,
     min_days_overdue: int | None = Query(default=None, ge=0),
     max_days_overdue: int | None = Query(default=None, ge=0),
+    min_days_since_sale: int | None = Query(default=None, ge=0),
+    max_days_since_sale: int | None = Query(default=None, ge=0),
     q: str | None = None,
     product_id: str | None = None,
     alert_status: str | None = Query(default=None, alias="status"),
@@ -126,6 +127,8 @@ def recovery_queue(
 ) -> list[dict] | dict:
     if min_days_overdue is not None and max_days_overdue is not None and min_days_overdue > max_days_overdue:
         raise HTTPException(status_code=422, detail="min_days_overdue cannot exceed max_days_overdue")
+    if min_days_since_sale is not None and max_days_since_sale is not None and min_days_since_sale > max_days_since_sale:
+        raise HTTPException(status_code=422, detail="min_days_since_sale cannot exceed max_days_since_sale")
     latest_result = (
         select(AlertContactAttempt.result).where(AlertContactAttempt.alert_id == Alert.id)
         .order_by(AlertContactAttempt.contacted_at.desc(), AlertContactAttempt.id.desc()).limit(1).correlate(Alert).scalar_subquery()
@@ -146,6 +149,10 @@ def recovery_queue(
         query = query.where(Alert.alert_date <= today - timedelta(days=min_days_overdue))
     if max_days_overdue is not None:
         query = query.where(Alert.alert_date >= today - timedelta(days=max_days_overdue))
+    if min_days_since_sale is not None:
+        query = query.where(Sale.sale_date <= today - timedelta(days=min_days_since_sale))
+    if max_days_since_sale is not None:
+        query = query.where(Sale.sale_date >= today - timedelta(days=max_days_since_sale))
     if q:
         term = f"%{q.strip()}%"
         query = query.where(or_(
@@ -190,7 +197,7 @@ def assign_recovery_alert(alert_id: str, payload: AssignmentCreate, current_user
         raise HTTPException(status_code=422, detail="An active advisor is required")
     validate_responsible(payload.assigned_advisor_id, db)
     alert = alert_or_404(alert_id, db)
-    if alert.status not in {"PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA", "VENCIDO_NO_GESTIONADO"}:
+    if alert.status not in {"PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA"} | RECOVERABLE_FINAL_STATUSES:
         raise HTTPException(status_code=409, detail="Only recoverable alerts can be assigned")
     record_alert_assignment(alert, payload.assigned_advisor_id, payload.reason.strip(), current_user.id, db)
     alert.status, alert.closed_at = "REASIGNADO", None
@@ -213,7 +220,7 @@ def bulk_assign_recovery_alerts(
     if len(alerts) != len(payload.alert_ids):
         raise HTTPException(status_code=404, detail="One or more alerts were not found")
     recoverable_ids = set(db.scalars(recovery_alerts_query(db).where(Alert.id.in_(payload.alert_ids)).with_only_columns(Alert.id)))
-    if recoverable_ids != set(payload.alert_ids) or any(alert.status not in {"PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA", "VENCIDO_NO_GESTIONADO"} for alert in alerts):
+    if recoverable_ids != set(payload.alert_ids) or any(alert.status not in {"PENDIENTE", "REPROGRAMADO", "SIN_RESPUESTA"} | RECOVERABLE_FINAL_STATUSES for alert in alerts):
         raise HTTPException(status_code=409, detail="Only alerts currently in the recovery scope can be assigned")
     reason = payload.reason.strip()
     for alert in alerts:

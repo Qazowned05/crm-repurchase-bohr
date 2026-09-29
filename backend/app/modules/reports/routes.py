@@ -1,5 +1,6 @@
 import csv
 from datetime import date
+from decimal import Decimal
 from io import StringIO
 
 from fastapi import APIRouter, Depends, Query
@@ -126,6 +127,36 @@ def metrics(start_date: date | None = None, end_date: date | None = None, curren
     attended_ids = {attempt.alert_id for attempt in attempts}
     attended = len(attended_ids)
     repurchased = sum(alert.status == "RECOMPRA_LOGRADA" for alert in alerts)
+    sales_items_query = (
+        select(Sale, SaleItem, Product)
+        .join(SaleItem, SaleItem.sale_id == Sale.id)
+        .join(Product, Product.id == SaleItem.product_id)
+        .where(Sale.status == "CONFIRMADA")
+    )
+    if start_date:
+        sales_items_query = sales_items_query.where(Sale.sale_date >= start_date)
+    if end_date:
+        sales_items_query = sales_items_query.where(Sale.sale_date <= end_date)
+    product_sales: dict[str, dict] = {}
+    sale_totals: dict[str, Decimal] = {}
+    total_revenue = Decimal("0")
+    repurchase_revenue = Decimal("0")
+    repurchase_revenue_by_advisor: dict[str, Decimal] = {}
+    total_units_sold = 0
+    for sale, item, product in db.execute(sales_items_query):
+        amount = (item.unit_price or Decimal("0")) * item.quantity
+        row = product_sales.setdefault(
+            product.id,
+            {"product_id": product.id, "product_name": product.name, "product_code": product.code, "units": 0, "revenue": Decimal("0")},
+        )
+        row["units"] += item.quantity
+        row["revenue"] += amount
+        sale_totals[sale.id] = sale_totals.get(sale.id, Decimal("0")) + amount
+        total_revenue += amount
+        if item.purchase_type == "RECOMPRA":
+            repurchase_revenue += amount
+            repurchase_revenue_by_advisor[sale.advisor_id] = repurchase_revenue_by_advisor.get(sale.advisor_id, Decimal("0")) + amount
+        total_units_sold += item.quantity
     items_query = select(SaleItem, Sale.sale_date).join(Sale, Sale.id == SaleItem.sale_id).where(Sale.status == "CONFIRMADA", SaleItem.prior_confirmed_item_id.is_not(None))
     if start_date:
         items_query = items_query.where(Sale.sale_date >= start_date)
@@ -139,7 +170,7 @@ def metrics(start_date: date | None = None, end_date: date | None = None, curren
     total = len(alerts)
     advisors = {advisor.id: advisor for advisor in db.scalars(select(User).where(User.role == "ASESOR"))}
     ranking: dict[str, dict] = {
-        advisor_id: {"advisor_id": advisor_id, "advisor_name": advisor.full_name, "confirmed_repurchases": 0,
+        advisor_id: {"advisor_id": advisor_id, "advisor_name": advisor.full_name, "confirmed_repurchases": 0, "repurchase_revenue": repurchase_revenue_by_advisor.get(advisor_id, Decimal("0")),
                      "managed_alerts": 0, "contact_attempts": 0, "closed_alerts": 0}
         for advisor_id, advisor in advisors.items()
     }
@@ -164,7 +195,7 @@ def metrics(start_date: date | None = None, end_date: date | None = None, curren
         advisor_attempts = {attempt.alert_id for attempt in attempts if attempt.advisor_id == row["advisor_id"]}
         row["managed_alerts"] = len(advisor_attempts)
         row["closed_alerts"] = sum(
-            alert.id in advisor_attempts and alert.status in {"RECOMPRA_LOGRADA", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CERRADO_POR_TIPIFICACION"}
+            alert.id in advisor_attempts and alert.status in {"RECOMPRA_LOGRADA", "COMPRA_OTRO_PRODUCTO", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CERRADO_POR_TIPIFICACION"}
             for alert in alerts
         )
 
@@ -189,6 +220,14 @@ def metrics(start_date: date | None = None, end_date: date | None = None, curren
         "repurchase_rate": repurchased / attended if attended else 0,
         "repurchase_denominator": attended,
         "average_days_between_purchases": sum(intervals) / len(intervals) if intervals else None,
-        "advisor_ranking": sorted(ranking.values(), key=lambda row: (-row["confirmed_repurchases"], -row["managed_alerts"], row["advisor_name"])),
+        "advisor_ranking": sorted(ranking.values(), key=lambda row: (-row["repurchase_revenue"], -row["confirmed_repurchases"], -row["managed_alerts"], row["advisor_name"])),
         "attention_typifications": sorted(typification_counts.values(), key=lambda row: (-row["attempts"], row["typification_name"])),
+        "total_revenue": total_revenue,
+        "regular_revenue": total_revenue - repurchase_revenue,
+        "repurchase_revenue": repurchase_revenue,
+        "total_units_sold": total_units_sold,
+        "confirmed_sales": len(sale_totals),
+        "average_ticket": total_revenue / len(sale_totals) if sale_totals else Decimal("0"),
+        "top_products_by_units": sorted(product_sales.values(), key=lambda row: (-row["units"], -row["revenue"], row["product_name"]))[:4],
+        "top_products_by_revenue": sorted(product_sales.values(), key=lambda row: (-row["revenue"], -row["units"], row["product_name"]))[:4],
     }

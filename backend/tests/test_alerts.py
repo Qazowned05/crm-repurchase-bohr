@@ -34,10 +34,10 @@ def setup_sale(client: TestClient, db: Session, sale_date: date, duration: int =
     return sale, product, supervisor_auth, advisor
 
 
-def add_product_with_rule(client: TestClient, supervisor_auth: dict[str, str], original: dict, suffix: str, duration: int) -> dict:
+def add_product_with_rule(client: TestClient, supervisor_auth: dict[str, str], original: dict, suffix: str, duration: int, unit_price: str = "1.00") -> dict:
     product = client.post("/api/v1/products", headers=supervisor_auth, json={
         "code": f"EXTRA-{suffix}", "name": f"Producto extra {suffix}",
-        "brand_id": original["brand_id"], "category_id": original["category_id"],
+        "brand_id": original["brand_id"], "category_id": original["category_id"], "unit_price": unit_price,
     }).json()
     assert client.post(f"/api/v1/products/{product['id']}/rules", headers=supervisor_auth, json={
         "duration_days": duration, "alert_days": [10, 3], "effective_from": "2020-01-01",
@@ -88,7 +88,29 @@ def test_contact_attempt_validates_and_reprograms_inbox(client: TestClient, db: 
     result = client.post(f"/api/v1/alerts/{alert.id}/attempts", headers=advisor_auth, json={"channel": "WHATSAPP", "result": "AUN_TIENE_PRODUCTO", "next_action_date": str(date.today() + timedelta(days=3))})
     assert result.status_code == 200 and result.json()["status"] == "REPROGRAMADO"
     assert db.query(AlertContactAttempt).filter_by(alert_id=alert.id).count() == 1
+    assert client.get("/api/v1/alerts/inbox", headers=advisor_auth).json() == []
+    alert.next_action_date = date.today()
+    db.commit()
     assert client.get("/api/v1/alerts/inbox", headers=advisor_auth).json()[0]["id"] == alert.id
+
+
+def test_reassigned_alert_reprograms_for_a_typification_with_next_action(client: TestClient, db: Session) -> None:
+    sale, _, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="reagenda")
+    typification = client.post(
+        "/api/v1/configuration/contact-typifications", headers=supervisor_auth,
+        json={"code": "CLIENTE_REAGENDA", "name": "Cliente reagenda", "requires_next_action": True},
+    ).json()
+    alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
+    db.get(Alert, alert["id"]).status = "REASIGNADO"
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/alerts/{alert['id']}/attempts", headers=auth(client, advisor.email),
+        json={"channel": "LLAMADA", "typification_id": typification["id"], "result": typification["code"], "next_action_date": str(date.today() + timedelta(days=1))},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "REPROGRAMADO"
+    assert response.json()["customer_id"] == sale["customer_id"]
 
 
 def test_confirmed_repurchase_and_annulment_close_active_alerts(client: TestClient, db: Session) -> None:
@@ -139,13 +161,13 @@ def test_managed_register_keeps_follow_up_and_closed_alert_history(client: TestC
     assert client.get("/api/v1/alerts/register?date_from=2030-01-02&date_to=2030-01-01", headers=supervisor_auth).status_code == 422
 
 
-def test_managed_repurchase_with_different_product_closes_source_alert(client: TestClient, db: Session) -> None:
+def test_managed_purchase_of_different_product_keeps_source_alert_recoverable(client: TestClient, db: Session) -> None:
     sale, original, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="different")
-    extra = add_product_with_rule(client, supervisor_auth, original, "different", 45)
+    extra = add_product_with_rule(client, supervisor_auth, original, "different", 45, unit_price="19.90")
     alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
 
     response = client.post(f"/api/v1/alerts/{alert['id']}/repurchase", headers=auth(client, advisor.email), json={
-        "items": [{"product_id": extra["id"], "quantity": 2, "unit_price": "19.90"}],
+        "items": [{"product_id": extra["id"], "quantity": 2}],
     })
 
     assert response.status_code == 201
@@ -159,8 +181,16 @@ def test_managed_repurchase_with_different_product_closes_source_alert(client: T
     assert item["purchase_type"] == "COMPRA"
     assert item["expected_repurchase_date"] == str(date.today() + timedelta(days=45))
     source = db.get(Alert, alert["id"])
-    assert source.status == "RECOMPRA_LOGRADA"
-    assert source.closure_reason == f"RECOMPRA_CONFIRMADA: venta {registered['id']}"
+    assert source.status == "COMPRA_OTRO_PRODUCTO"
+    assert source.closure_reason == f"COMPRA_OTRO_PRODUCTO: venta {registered['id']}"
+    recovery = client.get("/api/v1/supervision/recovery-alerts", headers=supervisor_auth)
+    assert [row["id"] for row in recovery.json()] == [alert["id"]]
+    reassigned = client.post(
+        f"/api/v1/supervision/alerts/{alert['id']}/assign", headers=supervisor_auth,
+        json={"assigned_advisor_id": advisor.id, "reason": "Recuperar producto original"},
+    )
+    assert reassigned.status_code == 200
+    assert reassigned.json()["status"] == "REASIGNADO"
     assert sale["items"][0]["product_id"] != registered["items"][0]["product_id"]
 
 

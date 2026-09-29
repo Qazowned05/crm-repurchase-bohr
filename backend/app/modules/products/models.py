@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, JSON, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, JSON, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -36,6 +36,7 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(180))
     brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id", ondelete="RESTRICT"), index=True)
     category_id: Mapped[str] = mapped_column(ForeignKey("product_categories.id", ondelete="RESTRICT"), index=True)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("1.00"))
     brand: Mapped[Brand] = relationship()
     category: Mapped[ProductCategory] = relationship()
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

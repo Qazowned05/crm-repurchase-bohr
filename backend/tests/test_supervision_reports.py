@@ -38,6 +38,28 @@ def test_recovery_queue_assigns_only_active_alerts(client: TestClient, db: Sessi
     assert client.get("/api/v1/supervision/recovery-alerts", headers=supervisor_auth).json() == []
 
 
+def test_closed_non_repurchase_alert_can_be_reassigned_from_recovery(client: TestClient, db: Session) -> None:
+    _, _, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="closure")
+    replacement = make_user(db, "closed-recovery-advisor@example.com", "ASESOR")
+    alert = client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json()[0]
+
+    closed = client.post(
+        f"/api/v1/alerts/{alert['id']}/attempts", headers=auth(client, advisor.email),
+        json={"channel": "LLAMADA", "result": "NO_INTERESADO"},
+    )
+    assert closed.status_code == 200
+    assert closed.json()["status"] == "NO_INTERESADO"
+
+    queued = client.get("/api/v1/supervision/recovery-alerts", headers=supervisor_auth)
+    assert [row["id"] for row in queued.json()] == [alert["id"]]
+    reassigned = client.post(
+        f"/api/v1/supervision/alerts/{alert['id']}/assign", headers=supervisor_auth,
+        json={"assigned_advisor_id": replacement.id, "reason": "Seguimiento de cierre sin recompra"},
+    )
+    assert reassigned.status_code == 200
+    assert reassigned.json()["status"] == "REASIGNADO"
+
+
 def test_reports_filter_invalid_alerts_and_export_csv(client: TestClient, db: Session) -> None:
     sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="report")
     client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
@@ -50,6 +72,11 @@ def test_reports_filter_invalid_alerts_and_export_csv(client: TestClient, db: Se
     assert csv_export.headers["content-type"].startswith("text/csv")
     metrics = client.get("/api/v1/reports/metrics", headers=supervisor_auth)
     assert metrics.json()["alerts_considered"] == 1
+    assert metrics.json()["total_units_sold"] == 1
+    assert metrics.json()["total_revenue"] == "1.00"
+    assert metrics.json()["regular_revenue"] == "1.00"
+    assert metrics.json()["repurchase_revenue"] == "0"
+    assert metrics.json()["top_products_by_units"][0]["units"] == 1
     assert client.get("/api/v1/reports/sales", headers=auth(client, "advisor-alertreport@example.com")).status_code == 403
 
 
@@ -76,6 +103,20 @@ def test_recovery_pagination_and_bulk_assignment_are_audited(client: TestClient,
     assert assigned.status_code == 200
     assert assigned.json()["count"] == 2
     assert db.query(AlertAssignmentHistory).filter(AlertAssignmentHistory.assigned_advisor_id == target.id).count() == 2
+
+
+def test_recovery_queue_filters_by_days_since_original_sale(client: TestClient, db: Session) -> None:
+    sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="saleage")
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
+    assert client.post(
+        f"/api/v1/supervision/customers/{sale['customer_id']}/transfer", headers=supervisor_auth,
+        json={"assigned_advisor_id": None, "reason": "Revisión de antigüedad"},
+    ).status_code == 200
+
+    included = client.get("/api/v1/supervision/recovery-queue?min_days_since_sale=20&max_days_since_sale=40", headers=supervisor_auth)
+    excluded = client.get("/api/v1/supervision/recovery-queue?min_days_since_sale=31", headers=supervisor_auth)
+    assert len(included.json()) == 1
+    assert excluded.json() == []
 
 
 def test_metrics_group_attempts_at_root_typification(client: TestClient, db: Session) -> None:

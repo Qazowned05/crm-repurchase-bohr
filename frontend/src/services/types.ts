@@ -42,7 +42,6 @@ export type Product = {
 export type RepurchaseItem = {
   product_id: string;
   quantity: number;
-  unit_price: number;
 };
 export type AlertRepurchaseCreate = {
   sale_date?: string;
@@ -180,6 +179,7 @@ export type AdvisorRanking = {
   advisor_id: string;
   advisor_name: string;
   confirmed_repurchases: number;
+  repurchase_revenue: string;
   managed_alerts: number;
   contact_attempts: number;
   closed_alerts: number;
@@ -190,6 +190,13 @@ export type AttentionTypification = {
   typification_name: string;
   attempts: number;
 };
+export type ProductSalesMetric = {
+  product_id: string;
+  product_name: string;
+  product_code: string;
+  units: number;
+  revenue: string;
+};
 export type Metrics = {
   alerts_considered: number;
   contact_rate: number;
@@ -198,4 +205,12 @@ export type Metrics = {
   average_days_between_purchases?: number | null;
   advisor_ranking: AdvisorRanking[];
   attention_typifications: AttentionTypification[];
+  total_revenue: string;
+  regular_revenue: string;
+  repurchase_revenue: string;
+  total_units_sold: number;
+  confirmed_sales: number;
+  average_ticket: string;
+  top_products_by_units: ProductSalesMetric[];
+  top_products_by_revenue: ProductSalesMetric[];
 };

@@ -23,6 +23,10 @@ function overdue(date: string) {
 type QueueRow = RecoveryAlert &
   Pick<RecoveryCustomer, "customer_id" | "dni" | "first_names" | "last_names">;
 
+function alertStatusClass(status: string) {
+  return `status alert-status-${status.toLowerCase().replaceAll("_", "-")}`;
+}
+
 export function RecoveryQueue() {
   const [data, setData] = useState<Paged<RecoveryCustomer>>({
     items: [],
@@ -41,6 +45,8 @@ export function RecoveryQueue() {
     typification_id: "",
     min_days_overdue: "",
     max_days_overdue: "",
+    min_days_since_sale: "",
+    max_days_since_sale: "",
     q: "",
     product_id: "",
     status: "",
@@ -92,7 +98,7 @@ export function RecoveryQueue() {
         <div>
           <p className="eyebrow">SUPERVISIÓN</p>
           <h1>Cola de recuperación</h1>
-          <p>Prioriza alertas vencidas y asígnalas al asesor adecuado.</p>
+          <p>Prioriza alertas vencidas según antigüedad de venta y reasígnalas al asesor adecuado.</p>
         </div>
         <div className="header-metric">
           <b>{data.total}</b>
@@ -112,6 +118,8 @@ export function RecoveryQueue() {
                 typification_id: "",
                 min_days_overdue: "",
                 max_days_overdue: "",
+                min_days_since_sale: "",
+                max_days_since_sale: "",
                 q: "",
                 product_id: "",
                 status: "",
@@ -169,6 +177,7 @@ export function RecoveryQueue() {
               >
                 <option value="">Todos los estados</option>
                 <option value="VENCIDO_NO_GESTIONADO">Vencida</option>
+                <option value="COMPRA_OTRO_PRODUCTO">Compra de otro producto</option>
                 <option value="REPROGRAMADO">Reprogramada</option>
                 <option value="PENDIENTE">Pendiente</option>
                 <option value="SIN_RESPUESTA">Sin respuesta</option>
@@ -191,24 +200,24 @@ export function RecoveryQueue() {
               </select>
             </label>
             <label>
-              Días vencidos desde
+              Días desde venta, mínimo
               <input
                 type="number"
                 min="0"
-                value={filters.min_days_overdue}
+                value={filters.min_days_since_sale}
                 onChange={(event) =>
-                  setFilters((value) => ({ ...value, min_days_overdue: event.target.value }))
+                  setFilters((value) => ({ ...value, min_days_since_sale: event.target.value }))
                 }
               />
             </label>
             <label>
-              Días vencidos hasta
+              Días desde venta, máximo
               <input
                 type="number"
                 min="0"
-                value={filters.max_days_overdue}
+                value={filters.max_days_since_sale}
                 onChange={(event) =>
-                  setFilters((value) => ({ ...value, max_days_overdue: event.target.value }))
+                  setFilters((value) => ({ ...value, max_days_since_sale: event.target.value }))
                 }
               />
             </label>
@@ -253,9 +262,11 @@ export function RecoveryQueue() {
                   />
                 </th>
                 <th>Cliente</th>
-                <th>Producto</th>
-                <th>Vencido</th>
-                <th>Tipificación</th>
+                 <th>Producto</th>
+                  <th>Desde venta</th>
+                  <th>Vencido</th>
+                  <th>Estado</th>
+                 <th>Tipificación</th>
                 <th>Asesor</th>
                 <th>Acción</th>
               </tr>
@@ -283,8 +294,12 @@ export function RecoveryQueue() {
                       {row.product_code} · Venta {row.sale_date}
                     </small>
                   </td>
+                  <td>{overdue(row.sale_date)} días</td>
                   <td className={overdue(row.alert_date) > 0 ? "danger-text" : ""}>
                     {overdue(row.alert_date)} días
+                  </td>
+                  <td>
+                    <span className={alertStatusClass(row.status)}>{row.status.replaceAll("_", " ")}</span>
                   </td>
                   <td>{row.latest_contact_typification || "Sin gestión"}</td>
                   <td>{row.assigned_advisor_name || "Sin asignar"}</td>
@@ -297,7 +312,7 @@ export function RecoveryQueue() {
               ))}
               {!rows.length && (
                 <tr>
-                  <td colSpan={7}>No hay alertas que coincidan con los filtros seleccionados.</td>
+                    <td colSpan={9}>No hay alertas que coincidan con los filtros seleccionados.</td>
                 </tr>
               )}
             </tbody>

@@ -434,6 +434,150 @@ tbody tr:hover {
   background: #f4f6f7;
   color: #485b69;
 }
+.supervisor-dashboard-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.supervisor-dashboard-grid .panel {
+  min-height: 244px;
+}
+.product-chart {
+  height: 200px;
+  margin-top: 4px;
+}
+.advisor-ranking {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.advisor-ranking li {
+  display: grid;
+  grid-template-columns: 24px 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  border-top: 1px solid #dce5ec;
+  padding: 10px 0;
+}
+.advisor-ranking li:first-child {
+  border-top: 0;
+}
+.ranking-position {
+  color: #718596;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+.advisor-ranking li:first-child .ranking-position {
+  color: #a15c00;
+}
+.ranking-advisor {
+  min-width: 0;
+}
+.ranking-advisor b,
+.ranking-advisor small {
+  display: block;
+}
+.ranking-advisor b {
+  overflow: hidden;
+  color: #102a43;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ranking-advisor small {
+  margin-top: 2px;
+  color: #718596;
+  font-size: 11px;
+}
+.ranking-revenue {
+  color: #006345;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pie-legend {
+  color: #526b7d;
+  font-size: 11px;
+}
+.product-ranking {
+  display: grid;
+  gap: 12px;
+}
+.product-ranking > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(90px, 2fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: #29475e;
+  font-size: 12px;
+}
+.product-ranking span {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.product-ranking i {
+  display: block;
+  min-width: 6px;
+  height: 9px;
+  background: #005a9c;
+}
+.product-ranking b {
+  color: #003b67;
+  font-size: 12px;
+  text-align: right;
+}
+.revenue-ranking i {
+  background: #00734d;
+}
+.status.alert-status-pendiente {
+  border-color: #d9aa5d;
+  background: #fff8eb;
+  color: #875000;
+}
+.status.alert-status-reasignado {
+  border-color: #a9a4d0;
+  background: #f2f1fb;
+  color: #4d488f;
+}
+.status.alert-status-reprogramado {
+  border-color: #8eb9d7;
+  background: #edf6fb;
+  color: #005a9c;
+}
+.status.alert-status-sin-respuesta,
+.status.alert-status-no-interesado {
+  border-color: #a9b6c0;
+  background: #f4f6f7;
+  color: #485b69;
+}
+.status.alert-status-vencido-no-gestionado {
+  border-color: #d69a9a;
+  background: #fff1f1;
+  color: #972c2c;
+}
+.status.alert-status-recompra-lograda {
+  border-color: #6cae98;
+  background: #edf7f2;
+  color: #006345;
+}
+.status.alert-status-compra-otro-producto {
+  border-color: #c9a66b;
+  background: #fff7e8;
+  color: #7a5200;
+}
+.status.alert-status-cerrado-por-tipificacion {
+  border-color: #7bb6b5;
+  background: #edf8f8;
+  color: #006966;
+}
+.status.alert-status-cancelado-por-recompra,
+.status.alert-status-cancelado-por-anulacion {
+  border-color: #b7a3a3;
+  background: #f8f3f3;
+  color: #765353;
+}
 
 label {
   display: grid;
@@ -531,6 +675,13 @@ form footer,
 .alert-register-table .secondary {
   min-height: 32px;
   padding: 5px 9px;
+}
+.alert-register-customer + .alert-register-customer tr:first-child td {
+  border-top: 8px solid #f4f8fb;
+}
+.alert-register-customer .customer-cell {
+  background: #f4f8fb;
+  min-width: 150px;
 }
 .status.warning {
   border-color: #d9aa5d;
@@ -645,6 +796,42 @@ form footer,
   gap: 8px;
   margin-top: 14px;
 }
+.alert-customer-group {
+  border: 1px solid #c7d5df;
+  border-top: 3px solid #005a9c;
+  background: #fff;
+}
+.alert-customer-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #dce5ec;
+  padding: 12px 14px 10px;
+  color: #29475e;
+}
+.alert-customer-group > header b,
+.alert-customer-group > header small {
+  display: block;
+}
+.alert-customer-group > header small {
+  margin-top: 2px;
+  color: #718596;
+}
+.alert-customer-group > header > small {
+  margin: 0;
+  border-left: 3px solid #005a9c;
+  padding-left: 8px;
+  color: #526b7d;
+  font-size: 11px;
+  font-weight: 800;
+}
+.alert-customer-group .alert-row {
+  border-width: 1px 0 0;
+  border-color: #c8d9e4;
+  background: #fff;
+  padding: 10px 14px;
+}
 .alert-row {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -664,7 +851,7 @@ button.alert-row {
 }
 button.alert-row:hover {
   border-color: #9db5c8;
-  background: #f0f6fa;
+  background: #e9f2f8;
 }
 .alert-row b,
 .alert-row small {

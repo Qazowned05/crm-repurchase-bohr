@@ -6,6 +6,7 @@ import type { ContactAttempt, ManagedAlert, Paged, Product } from "../../service
 
 const closedStatuses = new Set([
   "RECOMPRA_LOGRADA",
+  "COMPRA_OTRO_PRODUCTO",
   "CERRADO_POR_TIPIFICACION",
   "CANCELADO_POR_RECOMPRA",
   "CANCELADO_POR_ANULACION",
@@ -26,8 +27,21 @@ function statusLabel(status: string) {
   return status.replaceAll("_", " ");
 }
 
+function alertStatusClass(status: string) {
+  return `status alert-status-${status.toLowerCase().replaceAll("_", "-")}`;
+}
+
 function latestAttempt(alert: ManagedAlert): ContactAttempt | undefined {
   return alert.contact_attempts[alert.contact_attempts.length - 1];
+}
+
+function groupByCustomer(alerts: ManagedAlert[]): ManagedAlert[][] {
+  const groups = new Map<string, ManagedAlert[]>();
+  alerts.forEach((alert) => {
+    const customerKey = alert.customer_id || alert.customer_dni || alert.id;
+    groups.set(customerKey, [...(groups.get(customerKey) || []), alert]);
+  });
+  return Array.from(groups.values());
 }
 
 function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => void }) {
@@ -267,6 +281,7 @@ export function AlertRegister() {
                 <option value="REPROGRAMADO">Reprogramada</option>
                 <option value="SIN_RESPUESTA">Sin respuesta</option>
                 <option value="VENCIDO_NO_GESTIONADO">Vencida</option>
+                <option value="COMPRA_OTRO_PRODUCTO">Compra de otro producto</option>
               </select>
             </label>
             <label>
@@ -302,21 +317,29 @@ export function AlertRegister() {
                 <th aria-label="Acciones" />
               </tr>
             </thead>
-            <tbody>
-              {data.items.map((alert) => {
-                const latest = latestAttempt(alert);
-                const closed = closedStatuses.has(alert.status);
-                return (
-                  <tr key={alert.id}>
-                    <td>
-                      <b>
-                        {`${alert.customer_first_names || ""} ${alert.customer_last_names || ""}`.trim() ||
-                          "Sin cliente"}
-                      </b>
-                      <span className="table-detail">
-                        {alert.customer_dni ? `DNI ${alert.customer_dni}` : ""}
-                      </span>
-                    </td>
+            {groupByCustomer(data.items).map((customerAlerts) => {
+              const customer = customerAlerts[0];
+              return (
+                <tbody className="alert-register-customer" key={customer.customer_id || customer.id}>
+                  {customerAlerts.map((alert, index) => {
+                    const latest = latestAttempt(alert);
+                    const closed = closedStatuses.has(alert.status);
+                    return (
+                      <tr key={alert.id}>
+                        {index === 0 && (
+                          <td rowSpan={customerAlerts.length} className="customer-cell">
+                            <b>
+                              {`${customer.customer_first_names || ""} ${customer.customer_last_names || ""}`.trim() ||
+                                "Sin cliente"}
+                            </b>
+                            <span className="table-detail">
+                              {customer.customer_dni ? `DNI ${customer.customer_dni}` : ""}
+                            </span>
+                            <span className="table-detail">
+                              {customerAlerts.length} {customerAlerts.length === 1 ? "alerta" : "alertas"}
+                            </span>
+                          </td>
+                        )}
                     <td>
                       <b>{alert.product_name || "Sin producto"}</b>
                       <span className="table-detail">{alert.product_code || ""}</span>
@@ -327,9 +350,7 @@ export function AlertRegister() {
                       <span className="table-detail">Alerta: {formatDate(alert.alert_date)}</span>
                     </td>
                     <td>
-                      <span className={`status ${closed ? "success" : "warning"}`}>
-                        {closed ? "Cerrada" : statusLabel(alert.status)}
-                      </span>
+                      <span className={alertStatusClass(alert.status)}>{statusLabel(alert.status)}</span>
                       <span className="table-detail">
                         {closed
                           ? alert.closure_reason || statusLabel(alert.status)
@@ -357,10 +378,12 @@ export function AlertRegister() {
                         Ver detalle
                       </button>
                     </td>
-                  </tr>
-                );
-              })}
-            </tbody>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              );
+            })}
           </table>
         </div>
         {!data.items.length && !error && (

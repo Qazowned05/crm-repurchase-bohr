@@ -74,6 +74,9 @@ def test_supervisor_creates_product_and_versioned_rule(client: TestClient, db: S
     product = client.post("/api/v1/products", headers=auth, json={"code": "COL-001", "name": "Colageno", "brand_id": brand["id"], "category_id": category["id"]})
 
     assert product.status_code == 201
+    updated_product = client.patch(f"/api/v1/products/{product.json()['id']}", headers=auth, json={"unit_price": "19.90"})
+    assert updated_product.status_code == 200
+    assert updated_product.json()["unit_price"] == "19.90"
     invalid_rule = client.post(
         f"/api/v1/products/{product.json()['id']}/rules",
         headers=auth,

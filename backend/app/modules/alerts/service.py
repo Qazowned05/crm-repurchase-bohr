@@ -17,8 +17,8 @@ from app.modules.products.models import Product
 from app.modules.sales.models import Sale, SaleItem
 from app.modules.supervision.models import AlertAssignmentHistory
 
-FINAL_STATUSES = {"RECOMPRA_LOGRADA", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CANCELADO_POR_ANULACION", "CERRADO_POR_TIPIFICACION", "VENCIDO_NO_GESTIONADO"}
-RECOVERABLE_FINAL_STATUSES = {"VENCIDO_NO_GESTIONADO"}
+FINAL_STATUSES = {"RECOMPRA_LOGRADA", "COMPRA_OTRO_PRODUCTO", "NO_INTERESADO", "CANCELADO_POR_RECOMPRA", "CANCELADO_POR_ANULACION", "CERRADO_POR_TIPIFICACION", "VENCIDO_NO_GESTIONADO"}
+RECOVERABLE_FINAL_STATUSES = {"VENCIDO_NO_GESTIONADO", "COMPRA_OTRO_PRODUCTO", "NO_INTERESADO", "CERRADO_POR_TIPIFICACION"}
 logger = logging.getLogger(__name__)
 _generation_lock = Lock()
 _scheduler_stop = Event()
@@ -108,11 +108,16 @@ def advisor_visible_alerts_query(db: Session, today: date | None = None):
     config = alert_settings(db)
     stale_cutoff = datetime.combine(current_date - timedelta(days=config.stale_days), datetime.min.time(), tzinfo=timezone.utc)
     return active_alerts_query().where(
-        (Alert.status == "REASIGNADO") | (
-            (Alert.alert_date >= current_date - timedelta(days=config.advisor_visibility_days))
-            & (Alert.attempts_count < config.maximum_attempts)
-            & (func.coalesce(Alert.last_contact_at, Alert.created_at) >= stale_cutoff)
-        )
+        or_(Alert.next_action_date.is_(None), Alert.next_action_date <= current_date),
+        or_(
+            Alert.status == "REASIGNADO",
+            Alert.next_action_date <= current_date,
+            (
+                (Alert.alert_date >= current_date - timedelta(days=config.advisor_visibility_days))
+                & (Alert.attempts_count < config.maximum_attempts)
+                & (func.coalesce(Alert.last_contact_at, Alert.created_at) >= stale_cutoff)
+            ),
+        ),
     )
 
 
@@ -123,6 +128,7 @@ def recovery_alerts_query(db: Session, today: date | None = None):
     return select(Alert).where(
         Alert.status.not_in(FINAL_STATUSES - RECOVERABLE_FINAL_STATUSES),
         Alert.status != "REASIGNADO",
+        or_(Alert.next_action_date.is_(None), Alert.next_action_date < current_date),
         or_(
             Alert.assigned_advisor_id.is_(None),
             Alert.status.in_(RECOVERABLE_FINAL_STATUSES),
