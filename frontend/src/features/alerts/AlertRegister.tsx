@@ -35,6 +35,16 @@ function latestAttempt(alert: ManagedAlert): ContactAttempt | undefined {
   return alert.contact_attempts[alert.contact_attempts.length - 1];
 }
 
+function closureDetail(alert: ManagedAlert) {
+  if (alert.status === "RECOMPRA_LOGRADA") return null;
+  if (alert.closure_reason?.startsWith("TIPIFICACION_DE_CIERRE: ")) {
+    return alert.closure_reason.replace("TIPIFICACION_DE_CIERRE: ", "");
+  }
+  if (alert.closure_reason === "VENTA_ORIGINAL_ANULADA") return "Venta original anulada";
+  if (alert.closure_reason === "CIERRE_MANUAL") return "Cierre manual";
+  return null;
+}
+
 function groupByCustomer(alerts: ManagedAlert[]): ManagedAlert[][] {
   const groups = new Map<string, ManagedAlert[]>();
   alerts.forEach((alert) => {
@@ -353,7 +363,7 @@ export function AlertRegister() {
                       <span className={alertStatusClass(alert.status)}>{statusLabel(alert.status)}</span>
                       <span className="table-detail">
                         {closed
-                          ? alert.closure_reason || statusLabel(alert.status)
+                          ? closureDetail(alert) || latest?.observation || latest?.note
                           : `Próxima: ${formatDate(alert.next_action_date)}`}
                       </span>
                     </td>
