@@ -18,9 +18,15 @@ export type Customer = {
   responsible_advisor_id?: string | null;
   acquisition_channel?: string | null;
   condition?: string | null;
-  birth_year?: number | null;
-  sales_district?: string | null;
+  birth_date?: string | null;
+  department?: string | null;
+  province?: string | null;
+  district?: string | null;
+  ubigeo?: string | null;
 };
+export type LocationDistrict = { code: string; name: string };
+export type LocationProvince = { code: string; name: string; districts: LocationDistrict[] };
+export type LocationDepartment = { code: string; name: string; provinces: LocationProvince[] };
 export type CatalogItem = {
   id: string;
   name: string;
@@ -171,15 +177,21 @@ export type Sale = {
 };
 export type AdvisorSalesMetrics = {
   confirmed_sales: number;
+  regular_sales: number;
   confirmed_items: number;
   repurchase_sales: number;
   repurchase_items: number;
+  total_revenue: string;
+  regular_revenue: string;
+  repurchase_revenue: string;
 };
 export type AdvisorRanking = {
   advisor_id: string;
   advisor_name: string;
   confirmed_repurchases: number;
+  regular_revenue: string;
   repurchase_revenue: string;
+  total_revenue: string;
   managed_alerts: number;
   contact_attempts: number;
   closed_alerts: number;

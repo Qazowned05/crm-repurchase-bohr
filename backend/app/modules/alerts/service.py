@@ -175,15 +175,17 @@ def generate_daily_alerts(run_date: date, db: Session) -> dict[str, int]:
     return {"created": created, "pending": pending, "expired": expired}
 
 
-def run_alert_generation(run_date: date, db: Session) -> dict[str, int]:
-    """Serialize generation and commit it before another caller can inspect alerts."""
+def run_alert_generation(run_date: date, db: Session, *, commit: bool = True) -> dict[str, int]:
+    """Serialize generation; callers can include it in a larger transaction."""
     with _generation_lock:
         try:
             result = generate_daily_alerts(run_date, db)
-            db.commit()
+            if commit:
+                db.commit()
             return result
         except Exception:
-            db.rollback()
+            if commit:
+                db.rollback()
             raise
 
 

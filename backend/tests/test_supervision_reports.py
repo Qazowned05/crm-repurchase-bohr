@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.modules.alerts.models import Alert
+from app.modules.reports.routes import excel_value
 from app.modules.supervision.models import AlertAssignmentHistory, CustomerAssignmentHistory
 from tests.test_alerts import auth, make_user, setup_sale
 
@@ -23,6 +24,18 @@ def test_portfolio_transfer_moves_active_alerts_and_records_history(client: Test
     assert db.query(CustomerAssignmentHistory).count() == 1
     assert db.query(AlertAssignmentHistory).count() == 1
     assert client.post(f"/api/v1/alerts/{alert.id}/attempts", headers=auth(client, original_advisor.email), json={"channel": "LLAMADA", "result": "SIN_RESPUESTA", "next_action_date": str(date.today())}).status_code == 403
+
+
+def test_customer_edit_transfers_active_alerts_and_records_history(client: TestClient, db: Session) -> None:
+    sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="cedit")
+    replacement = make_user(db, "customer-edit-advisor@example.com", "ASESOR")
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
+    response = client.patch(f"/api/v1/customers/{sale['customer_id']}", headers=supervisor_auth, json={"responsible_advisor_id": replacement.id})
+    assert response.status_code == 200
+    alert = db.query(Alert).one()
+    assert alert.assigned_advisor_id == replacement.id
+    assert db.query(CustomerAssignmentHistory).count() == 1
+    assert db.query(AlertAssignmentHistory).count() == 1
 
 
 def test_recovery_queue_assigns_only_active_alerts(client: TestClient, db: Session) -> None:
@@ -77,7 +90,14 @@ def test_reports_filter_invalid_alerts_and_export_csv(client: TestClient, db: Se
     assert metrics.json()["regular_revenue"] == "1.00"
     assert metrics.json()["repurchase_revenue"] == "0"
     assert metrics.json()["top_products_by_units"][0]["units"] == 1
+    excel_export = client.get("/api/v1/reports/operation.xlsx", headers=supervisor_auth)
+    assert excel_export.status_code == 200
+    assert excel_export.content.startswith(b"PK")
     assert client.get("/api/v1/reports/sales", headers=auth(client, "advisor-alertreport@example.com")).status_code == 403
+
+
+def test_excel_values_escape_formula_prefixes() -> None:
+    assert excel_value("=HYPERLINK(\"https://example.com\")") == "'=HYPERLINK(\"https://example.com\")"
 
 
 def test_recovery_pagination_and_bulk_assignment_are_audited(client: TestClient, db: Session) -> None:

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -12,8 +12,11 @@ class CustomerCreate(BaseModel):
     email: EmailStr | None = None
     responsible_advisor_id: str | None = None
     condition: str | None = Field(default=None, max_length=500)
-    birth_year: int | None = Field(default=None, ge=1900, le=2100)
-    sales_district: str | None = Field(default=None, max_length=120)
+    birth_date: date | None = Field(default=None, le=date.today())
+    department: str | None = Field(default=None, max_length=120)
+    province: str | None = Field(default=None, max_length=120)
+    district: str | None = Field(default=None, max_length=120)
+    ubigeo: str | None = Field(default=None, pattern=r"^\d{6}$")
 
     @field_validator("dni")
     @classmethod
@@ -30,8 +33,11 @@ class CustomerUpdate(BaseModel):
     phone: str | None = Field(default=None, min_length=6, max_length=30)
     email: EmailStr | None = None
     condition: str | None = Field(default=None, max_length=500)
-    birth_year: int | None = Field(default=None, ge=1900, le=2100)
-    sales_district: str | None = Field(default=None, max_length=120)
+    birth_date: date | None = Field(default=None, le=date.today())
+    department: str | None = Field(default=None, max_length=120)
+    province: str | None = Field(default=None, max_length=120)
+    district: str | None = Field(default=None, max_length=120)
+    ubigeo: str | None = Field(default=None, pattern=r"^\d{6}$")
 
 
 class CustomerSupervisorUpdate(CustomerUpdate):
@@ -51,8 +57,11 @@ class CustomerResponse(BaseModel):
     acquisition_channel: str | None
     acquisition_channel_detail: str | None
     condition: str | None
-    birth_year: int | None
-    sales_district: str | None
+    birth_date: date | None
+    department: str | None
+    province: str | None
+    district: str | None
+    ubigeo: str | None
     created_at: datetime
     updated_at: datetime
 

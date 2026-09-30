@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
-import { api } from "../../services/api";
+import { api, listAll } from "../../services/api";
 import type {
   Paged,
   Product,
@@ -64,16 +64,14 @@ export function RecoveryQueue() {
   };
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar la cola de recuperación."));
-    api<Paged<User> | User[]>("/users?page=1&page_size=200")
-      .then((value) =>
-        setAdvisors(asPaged(value).items.filter((u) => u.role === "ASESOR" && u.is_active)),
-      )
+    listAll<User>("/users")
+      .then((value) => setAdvisors(value.filter((u) => u.role === "ASESOR" && u.is_active)))
       .catch(() => {});
     api<TypificationTree[]>("/configuration/contact-typifications/tree")
       .then(setTree)
       .catch(() => {});
-    api<Paged<Product> | Product[]>("/products?page=1&page_size=200")
-      .then((value) => setProducts(asPaged(value).items))
+    listAll<Product>("/products")
+      .then(setProducts)
       .catch(() => {});
   }, []);
   const rows: QueueRow[] = data.items.flatMap((customer) =>
@@ -98,7 +96,9 @@ export function RecoveryQueue() {
         <div>
           <p className="eyebrow">SUPERVISIÓN</p>
           <h1>Cola de recuperación</h1>
-          <p>Prioriza alertas vencidas según antigüedad de venta y reasígnalas al asesor adecuado.</p>
+          <p>
+            Prioriza alertas vencidas según antigüedad de venta y reasígnalas al asesor adecuado.
+          </p>
         </div>
         <div className="header-metric">
           <b>{data.total}</b>
@@ -221,6 +221,28 @@ export function RecoveryQueue() {
                 }
               />
             </label>
+            <label>
+              Días vencidos, mínimo
+              <input
+                type="number"
+                min="0"
+                value={filters.min_days_overdue}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, min_days_overdue: event.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Días vencidos, máximo
+              <input
+                type="number"
+                min="0"
+                value={filters.max_days_overdue}
+                onChange={(event) =>
+                  setFilters((value) => ({ ...value, max_days_overdue: event.target.value }))
+                }
+              />
+            </label>
             <button>Aplicar filtros</button>
           </div>
         </form>
@@ -262,11 +284,11 @@ export function RecoveryQueue() {
                   />
                 </th>
                 <th>Cliente</th>
-                 <th>Producto</th>
-                  <th>Desde venta</th>
-                  <th>Vencido</th>
-                  <th>Estado</th>
-                 <th>Tipificación</th>
+                <th>Producto</th>
+                <th>Desde venta</th>
+                <th>Vencido</th>
+                <th>Estado</th>
+                <th>Tipificación</th>
                 <th>Asesor</th>
                 <th>Acción</th>
               </tr>
@@ -299,7 +321,9 @@ export function RecoveryQueue() {
                     {overdue(row.alert_date)} días
                   </td>
                   <td>
-                    <span className={alertStatusClass(row.status)}>{row.status.replaceAll("_", " ")}</span>
+                    <span className={alertStatusClass(row.status)}>
+                      {row.status.replaceAll("_", " ")}
+                    </span>
                   </td>
                   <td>{row.latest_contact_typification || "Sin gestión"}</td>
                   <td>{row.assigned_advisor_name || "Sin asignar"}</td>
@@ -312,7 +336,7 @@ export function RecoveryQueue() {
               ))}
               {!rows.length && (
                 <tr>
-                    <td colSpan={9}>No hay alertas que coincidan con los filtros seleccionados.</td>
+                  <td colSpan={9}>No hay alertas que coincidan con los filtros seleccionados.</td>
                 </tr>
               )}
             </tbody>

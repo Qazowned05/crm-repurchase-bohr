@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Modal } from "../../components/Modal";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
-import { api } from "../../services/api";
+import { api, listAll } from "../../services/api";
 import type { ContactAttempt, ManagedAlert, Paged, Product } from "../../services/types";
 
 const closedStatuses = new Set([
@@ -159,8 +159,8 @@ export function AlertRegister() {
   };
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar el registro de alertas."));
-    api<Paged<Product> | Product[]>("/products?page=1&page_size=200")
-      .then((value) => setProducts(asPaged(value).items))
+    listAll<Product>("/products")
+      .then(setProducts)
       .catch(() => {});
   }, []);
   return (
@@ -292,6 +292,11 @@ export function AlertRegister() {
                 <option value="SIN_RESPUESTA">Sin respuesta</option>
                 <option value="VENCIDO_NO_GESTIONADO">Vencida</option>
                 <option value="COMPRA_OTRO_PRODUCTO">Compra de otro producto</option>
+                <option value="CERRADO_POR_TIPIFICACION">Cerrada por tipificación</option>
+                <option value="RECOMPRA_LOGRADA">Recompra lograda</option>
+                <option value="NO_INTERESADO">No interesado</option>
+                <option value="CANCELADO_POR_RECOMPRA">Cancelada por recompra</option>
+                <option value="CANCELADO_POR_ANULACION">Cancelada por anulación</option>
               </select>
             </label>
             <label>
@@ -330,7 +335,10 @@ export function AlertRegister() {
             {groupByCustomer(data.items).map((customerAlerts) => {
               const customer = customerAlerts[0];
               return (
-                <tbody className="alert-register-customer" key={customer.customer_id || customer.id}>
+                <tbody
+                  className="alert-register-customer"
+                  key={customer.customer_id || customer.id}
+                >
                   {customerAlerts.map((alert, index) => {
                     const latest = latestAttempt(alert);
                     const closed = closedStatuses.has(alert.status);
@@ -346,48 +354,53 @@ export function AlertRegister() {
                               {customer.customer_dni ? `DNI ${customer.customer_dni}` : ""}
                             </span>
                             <span className="table-detail">
-                              {customerAlerts.length} {customerAlerts.length === 1 ? "alerta" : "alertas"}
+                              {customerAlerts.length}{" "}
+                              {customerAlerts.length === 1 ? "alerta" : "alertas"}
                             </span>
                           </td>
                         )}
-                    <td>
-                      <b>{alert.product_name || "Sin producto"}</b>
-                      <span className="table-detail">{alert.product_code || ""}</span>
-                    </td>
-                    <td>{alert.assigned_advisor_name || "Sin asignar"}</td>
-                    <td>
-                      {formatDate(alert.expected_repurchase_date)}
-                      <span className="table-detail">Alerta: {formatDate(alert.alert_date)}</span>
-                    </td>
-                    <td>
-                      <span className={alertStatusClass(alert.status)}>{statusLabel(alert.status)}</span>
-                      <span className="table-detail">
-                        {closed
-                          ? closureDetail(alert) || latest?.observation || latest?.note
-                          : `Próxima: ${formatDate(alert.next_action_date)}`}
-                      </span>
-                    </td>
-                    <td>
-                      {latest ? (
-                        <>
-                          <b>
-                            {latest.child_typification_name ||
-                              latest.parent_typification_name ||
-                              latest.result}
-                          </b>
+                        <td>
+                          <b>{alert.product_name || "Sin producto"}</b>
+                          <span className="table-detail">{alert.product_code || ""}</span>
+                        </td>
+                        <td>{alert.assigned_advisor_name || "Sin asignar"}</td>
+                        <td>
+                          {formatDate(alert.expected_repurchase_date)}
                           <span className="table-detail">
-                            {formatDate(latest.contacted_at, true)}
+                            Alerta: {formatDate(alert.alert_date)}
                           </span>
-                        </>
-                      ) : (
-                        "Sin gestión"
-                      )}
-                    </td>
-                    <td>
-                      <button className="secondary" onClick={() => setSelected(alert)}>
-                        Ver detalle
-                      </button>
-                    </td>
+                        </td>
+                        <td>
+                          <span className={alertStatusClass(alert.status)}>
+                            {statusLabel(alert.status)}
+                          </span>
+                          <span className="table-detail">
+                            {closed
+                              ? closureDetail(alert) || latest?.observation || latest?.note
+                              : `Próxima: ${formatDate(alert.next_action_date)}`}
+                          </span>
+                        </td>
+                        <td>
+                          {latest ? (
+                            <>
+                              <b>
+                                {latest.child_typification_name ||
+                                  latest.parent_typification_name ||
+                                  latest.result}
+                              </b>
+                              <span className="table-detail">
+                                {formatDate(latest.contacted_at, true)}
+                              </span>
+                            </>
+                          ) : (
+                            "Sin gestión"
+                          )}
+                        </td>
+                        <td>
+                          <button className="secondary" onClick={() => setSelected(alert)}>
+                            Ver detalle
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}

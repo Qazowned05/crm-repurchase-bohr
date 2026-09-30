@@ -434,6 +434,21 @@ tbody tr:hover {
   background: #f4f6f7;
   color: #485b69;
 }
+label:has(:is(input, select, textarea)[required])::before {
+  position: absolute;
+  top: 0;
+  left: -10px;
+  color: #b42318;
+  content: "*";
+  font-weight: 800;
+}
+label:has(:is(input, select, textarea)[required]) {
+  position: relative;
+}
+.field-readonly input {
+  background: #eef3f6;
+  color: #526b7d;
+}
 .supervisor-dashboard-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -675,6 +690,10 @@ form footer,
 .alert-register-table .secondary {
   min-height: 32px;
   padding: 5px 9px;
+}
+.checkbox-label {
+  grid-template-columns: auto 1fr;
+  align-items: center;
 }
 .alert-register-customer + .alert-register-customer tr:first-child td {
   border-top: 8px solid #f4f8fb;
@@ -1121,6 +1140,21 @@ button.alert-row:hover {
   color: #003b67;
   font-size: 15px;
 }
+.sale-details-grid {
+  align-items: start;
+}
+.sale-add-product {
+  margin-top: 2px;
+}
+.sale-notes {
+  margin-top: 28px;
+  border-top: 1px solid #dce5ec;
+  padding-top: 18px;
+}
+.sale-notes textarea {
+  min-height: 96px;
+  resize: vertical;
+}
 .sale-line {
   display: grid;
   grid-template-columns: 1fr 100px auto;
@@ -1417,5 +1451,381 @@ button.alert-row:hover {
   .repurchase-section-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+/* Refined application-wide visual system. */
+:root {
+  font-family: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+  color: #19364b;
+  background: #f4f7fa;
+}
+body {
+  background: #f4f7fa;
+}
+button {
+  min-height: 40px;
+  border-color: #075b96;
+  border-radius: 7px;
+  background: #075b96;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+button:hover {
+  border-color: #034675;
+  background: #034675;
+  box-shadow: 0 3px 8px rgba(3, 70, 117, 0.18);
+  transform: translateY(-1px);
+}
+button:active {
+  box-shadow: none;
+  transform: translateY(0);
+}
+button.secondary {
+  border-color: #b6c8d6;
+  border-radius: 7px;
+  color: #075b96;
+}
+button.secondary:hover {
+  border-color: #4981a8;
+  background: #edf5fa;
+  box-shadow: none;
+}
+aside {
+  width: 252px;
+  border-right-color: #002b49;
+  background: linear-gradient(165deg, #063a61 0%, #002d4e 100%);
+  padding: 26px 16px 20px;
+}
+.brand span {
+  border-color: rgba(255, 255, 255, 0.72);
+  border-radius: 8px;
+}
+aside nav {
+  gap: 4px;
+}
+aside nav button {
+  border-left: 0;
+  border-radius: 7px;
+}
+aside nav button:hover,
+aside nav button.active {
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: none;
+  transform: none;
+}
+.content {
+  margin-left: 252px;
+  padding: 36px 44px 52px;
+  animation: content-enter 240ms ease-out;
+}
+.page-title {
+  margin-bottom: 30px;
+  border-bottom-color: #d8e2e9;
+  padding-bottom: 18px;
+}
+.panel {
+  margin-bottom: 22px;
+  border-color: #d8e2e9;
+  border-radius: 10px;
+  box-shadow: 0 2px 7px rgba(21, 52, 75, 0.035);
+  padding: 22px;
+}
+.stat {
+  border-color: #d8e2e9;
+  border-top-color: #0b6fae;
+  border-radius: 9px;
+  box-shadow: 0 2px 7px rgba(21, 52, 75, 0.03);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+.stat:hover {
+  box-shadow: 0 6px 16px rgba(21, 52, 75, 0.08);
+  transform: translateY(-2px);
+}
+input,
+select,
+textarea {
+  border-color: #b9cad7;
+  border-radius: 7px;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #0b6fae;
+  box-shadow: 0 0 0 3px rgba(11, 111, 174, 0.12);
+}
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+th {
+  border-bottom-color: #c7d7e2;
+}
+tbody tr {
+  transition: background-color 120ms ease;
+}
+tbody tr:hover {
+  background: #f2f7fa;
+}
+.badge,
+.status,
+.status-active,
+.status-inactive,
+.rule-list span {
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+.modal {
+  border-color: #c4d4df;
+  border-radius: 11px;
+  box-shadow: 0 20px 48px rgba(0, 38, 65, 0.2);
+}
+.icon {
+  border-radius: 6px;
+}
+.form-error,
+.error,
+.success-message {
+  border-radius: 6px;
+}
+.rule-card,
+.catalog-list > div,
+.empty-rules,
+.empty-state {
+  border-radius: 7px;
+}
+.row-actions {
+  gap: 8px;
+}
+.operations-panel {
+  overflow: hidden;
+}
+.operation-section-heading {
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e1e9ee;
+  padding-bottom: 15px;
+}
+.operation-section-heading h2 {
+  margin-bottom: 6px;
+}
+.operation-section-heading p {
+  margin: 0;
+  color: #61798b;
+  font-size: 13px;
+}
+.operations-panel .form-grid {
+  gap: 18px;
+}
+.operation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+  border-top: 1px solid #e1e9ee;
+  padding-top: 18px;
+}
+.operation-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.operation-actions span {
+  color: #668093;
+  font-size: 12px;
+  font-weight: 700;
+}
+.report-action {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 26px;
+  border-top: 1px solid #e1e9ee;
+  padding-top: 18px;
+}
+.import-result {
+  margin-top: 20px;
+  border: 1px solid #c8e0d3;
+  border-radius: 8px;
+  background: #f3faf6;
+  padding: 14px;
+}
+.import-result > p:first-child {
+  margin-top: 0;
+  color: #196346;
+}
+@keyframes content-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+@media (max-width: 900px) {
+  .content {
+    margin-left: 210px;
+    padding: 28px;
+  }
+  aside {
+    width: 210px;
+  }
+}
+@media (max-width: 680px) {
+  .content {
+    margin-left: 0;
+    padding: 24px 16px 36px;
+  }
+  aside {
+    width: 100%;
+  }
+  .panel {
+    padding: 18px;
+    border-radius: 9px;
+  }
+  .operation-actions,
+  .operation-actions > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .operation-actions button,
+  .report-action button {
+    width: 100%;
+  }
+  .report-action {
+    display: block;
+  }
+}
+
+/* Let hierarchy come from size, color, and spacing rather than excessive weight. */
+button {
+  font-weight: 600;
+}
+aside nav button,
+.profile button {
+  font-weight: 500;
+}
+label {
+  font-weight: 600;
+}
+.stat span,
+th,
+.eyebrow,
+.header-metric,
+.operation-actions span {
+  font-weight: 600;
+}
+.badge,
+.status,
+.status-active,
+.status-inactive,
+.rule-list span {
+  font-weight: 600;
+}
+.login-form label:has(:is(input, select, textarea)[required])::before {
+  display: none;
+}
+.pagination {
+  min-height: 36px;
+  transition: opacity 160ms ease;
+}
+.pagination.is-loading {
+  opacity: 0.68;
+}
+.pagination-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #557186;
+  font-size: 12px;
+  font-weight: 500;
+}
+.pagination-loading::before {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #c2d4e0;
+  border-top-color: #0b6fae;
+  border-radius: 50%;
+  content: "";
+  animation: pagination-spin 650ms linear infinite;
+}
+@keyframes pagination-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.supervisor-dashboard-grid .product-chart {
+  height: 360px;
+}
+.supervisor-dashboard-grid .product-ranking-chart {
+  height: 280px;
+}
+.advisor-alert-stats {
+  margin-bottom: 22px;
+}
+.alert-inbox-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) repeat(2, minmax(145px, 1fr)) auto auto;
+  align-items: end;
+  gap: 12px;
+  margin: 20px 0;
+  border-bottom: 1px solid #e1e9ee;
+  padding-bottom: 20px;
+}
+.alert-inbox-filters button {
+  white-space: nowrap;
+}
+.advisor-ranking li {
+  grid-template-columns: 24px 28px minmax(0, 1fr) minmax(270px, 1.2fr);
+}
+.ranking-revenue {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(76px, 1fr));
+  gap: 10px;
+  text-align: right;
+}
+.ranking-revenue > span {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+.ranking-revenue small {
+  color: #718596;
+  font-size: 10px;
+  font-weight: 500;
+}
+.ranking-revenue b {
+  color: #006345;
+  font-size: 12px;
+  white-space: nowrap;
+}
+@media (max-width: 680px) {
+  .advisor-ranking li {
+    grid-template-columns: 24px 28px minmax(0, 1fr);
+  }
+  .ranking-revenue {
+    grid-column: 3;
+    margin-top: 4px;
+  }
+  .alert-inbox-filters {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,5 +1,5 @@
 # Deploy with: docker compose -f docker-compose.yml -f compose.production.yml --env-file .env.production up -d --build
-# Requires Docker Compose v2.24+ because !reset removes development port mappings.
+# Requires Docker Compose v2.24.4+ because !reset and !override control production port mappings.
 services:
   db:
     environment:
@@ -29,3 +29,8 @@ services:
       timeout: 5s
       retries: 4
       start_period: 45s
+
+  frontend:
+    ports: !override
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped

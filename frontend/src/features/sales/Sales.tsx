@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { CrudModal } from "../../components/CrudModal";
+import { CustomerModal } from "../../components/CustomerModal";
 import { ConfirmModal, Modal } from "../../components/Modal";
-import { api } from "../../services/api";
+import { api, listAll } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import type {
@@ -14,17 +14,6 @@ import type {
 } from "../../services/types";
 
 type SaleLine = { product_id: string; quantity: number };
-
-const customerFields = [
-  { name: "dni", label: "DNI", required: true },
-  { name: "first_names", label: "Nombres", required: true },
-  { name: "last_names", label: "Apellidos", required: true },
-  { name: "phone", label: "Teléfono", required: true },
-  { name: "email", label: "Correo", type: "email" },
-  { name: "condition", label: "Enfermedad o condición" },
-  { name: "birth_year", label: "Año de nacimiento", type: "number" },
-  { name: "sales_district", label: "Distrito de venta" },
-];
 
 export function Sales({ user }: { user: User }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -45,19 +34,20 @@ export function Sales({ user }: { user: User }) {
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
   const [channel, setChannel] = useState("TV");
   const [error, setError] = useState("");
+  const [saleDirty, setSaleDirty] = useState(false);
   const [filters, setFilters] = useState({ q: "", product_id: "", status: "" });
   const advisor = user.role === "ASESOR";
   const load = async (page = salesPage.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
     const [customerRows, productRows, saleRows, advisorMetrics] = await Promise.all([
-      api<Paged<Customer> | Customer[]>("/customers?page=1&page_size=200"),
-      api<Paged<Product> | Product[]>("/products?page=1&page_size=200"),
+      api<Customer[]>("/customers/sale-options"),
+      listAll<Product>("/products"),
       api<Paged<Sale> | Sale[]>(`/sales?${query}`),
-      advisor ? api<AdvisorSalesMetrics>(`/sales/me/metrics?${query}`) : Promise.resolve(null),
+      advisor ? api<AdvisorSalesMetrics>("/sales/me/metrics") : Promise.resolve(null),
     ]);
-    setCustomers(asPaged(customerRows).items);
-    setProducts(asPaged(productRows).items.filter((product) => product.is_active));
+    setCustomers(customerRows);
+    setProducts(productRows.filter((product) => product.is_active));
     setSalesPage(asPaged(saleRows, page));
     setMetrics(advisorMetrics);
   };
@@ -69,6 +59,10 @@ export function Sales({ user }: { user: User }) {
     setOpen(false);
     setEditing(null);
     setError("");
+    setSaleDirty(false);
+  };
+  const requestCloseSale = () => {
+    if (!saleDirty || window.confirm("Hay cambios sin guardar. ¿Deseas descartarlos?")) closeSale();
   };
   const saveCustomer = async (data: Record<string, unknown>) => {
     const customer = await api<Customer>("/customers", {
@@ -132,7 +126,7 @@ export function Sales({ user }: { user: User }) {
           <h1>Ventas</h1>
           <p>
             {advisor
-              ? "Registra y consulta tus ventas."
+              ? "Registra ventas y consulta el historial de tu cartera."
               : "Consulta las ventas registradas por el equipo."}
           </p>
         </div>
@@ -234,10 +228,10 @@ export function Sales({ user }: { user: User }) {
       <section className="panel sales-history">
         <div className="panel-heading">
           <div>
-            <h2>{advisor ? "Mi historial de ventas" : "Historial de ventas"}</h2>
+            <h2>{advisor ? "Ventas de mi cartera" : "Historial de ventas"}</h2>
             <p>
               {advisor
-                ? "Solo se muestran las ventas que registraste."
+                ? "Incluye ventas de tus clientes, incluso si otro asesor las registró."
                 : "Incluye las ventas registradas por todos los asesores."}
             </p>
           </div>
@@ -250,7 +244,7 @@ export function Sales({ user }: { user: User }) {
             <thead>
               <tr>
                 <th>Fecha</th>
-                {!advisor && <th>Vendedor / asesor</th>}
+                <th>Registrada por</th>
                 <th>Cliente</th>
                 <th>Productos</th>
                 <th>Estado</th>
@@ -261,7 +255,7 @@ export function Sales({ user }: { user: User }) {
               {sales.map((sale) => (
                 <tr key={sale.id}>
                   <td>{sale.sale_date}</td>
-                  {!advisor && <td>{sale.advisor_full_name || sale.advisor_id}</td>}
+                  <td>{sale.advisor_full_name || sale.advisor_id}</td>
                   <td>
                     {customerName(sale)}
                     {(sale.customer_dni || sale.customer_phone) && (
@@ -311,7 +305,7 @@ export function Sales({ user }: { user: User }) {
               ))}
               {!sales.length && (
                 <tr>
-                  <td colSpan={advisor ? 4 : 6}>No hay ventas registradas.</td>
+                  <td colSpan={advisor ? 5 : 6}>No hay ventas registradas.</td>
                 </tr>
               )}
             </tbody>
@@ -325,9 +319,9 @@ export function Sales({ user }: { user: User }) {
         />
       </section>
       {open && (
-        <Modal title={editing ? "Editar venta" : "Registrar venta"} onClose={closeSale}>
-          <form onSubmit={submit}>
-            <div className="form-grid">
+        <Modal title={editing ? "Editar venta" : "Registrar venta"} onClose={requestCloseSale}>
+          <form className="sale-form" onSubmit={submit} onChange={() => setSaleDirty(true)}>
+            <div className="form-grid sale-details-grid">
               <label>
                 Cliente
                 <select
@@ -347,6 +341,7 @@ export function Sales({ user }: { user: User }) {
                     </option>
                   ))}
                 </select>
+                <small>La venta no cambia el asesor responsable de la cartera.</small>
               </label>
               <label>
                 Fecha de venta
@@ -428,20 +423,20 @@ export function Sales({ user }: { user: User }) {
                 </div>
               ))}
               <button
-                className="secondary"
+                className="secondary sale-add-product"
                 type="button"
                 onClick={() => setLines((current) => [...current, { product_id: "", quantity: 1 }])}
               >
                 Agregar producto
               </button>
             </div>
-            <label className="notes">
+            <label className="notes sale-notes">
               Notas opcionales
               <textarea name="notes" defaultValue={editing?.notes || ""} maxLength={4000} />
             </label>
             {error && <p className="form-error">{error}</p>}
             <footer>
-              <button type="button" className="secondary" onClick={closeSale}>
+              <button type="button" className="secondary" onClick={requestCloseSale}>
                 Cancelar
               </button>
               <button>Guardar venta</button>
@@ -450,9 +445,9 @@ export function Sales({ user }: { user: User }) {
         </Modal>
       )}
       {customerModal && (
-        <CrudModal
+        <CustomerModal
           title="Crear cliente"
-          fields={customerFields}
+          role={user.role}
           onClose={() => setCustomerModal(false)}
           onSave={saveCustomer}
         />

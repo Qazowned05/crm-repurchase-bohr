@@ -86,6 +86,19 @@ def test_advisor_cannot_register_sale_for_another_portfolio(client: TestClient, 
     assert denied.status_code == 403
 
 
+def test_advisor_sees_sales_for_own_portfolio(client: TestClient, db: Session) -> None:
+    advisor, customer, product, supervisor_auth = customer_and_product(client, db)
+    sale = client.post("/api/v1/sales", headers=supervisor_auth, json={
+        "customer_id": customer["id"], "sale_date": "2026-01-10", "acquisition_channel": "TV",
+        "items": [{"product_id": product["id"], "quantity": 1}],
+    })
+    assert sale.status_code == 201
+    portfolio_sales = client.get("/api/v1/sales", headers=headers(client, advisor.email)).json()
+    assert [row["id"] for row in portfolio_sales] == [sale.json()["id"]]
+    assert portfolio_sales[0]["advisor_full_name"] != advisor.full_name
+    assert client.get(f"/api/v1/sales/{sale.json()['id']}", headers=headers(client, advisor.email)).status_code == 200
+
+
 def test_advisor_personal_metrics_only_include_confirmed_sales(client: TestClient, db: Session) -> None:
     advisor, customer, product, _ = customer_and_product(client, db)
     auth_headers = headers(client, advisor.email)
@@ -93,9 +106,23 @@ def test_advisor_personal_metrics_only_include_confirmed_sales(client: TestClien
     client.post("/api/v1/sales", headers=auth_headers, json={"customer_id": customer["id"], "sale_date": "2026-02-10", "items": [{"product_id": product["id"], "quantity": 2}]})
     metrics = client.get("/api/v1/sales/me/metrics?date_from=2026-02-01", headers=auth_headers)
     assert metrics.status_code == 200
-    assert metrics.json() == {"confirmed_sales": 1, "confirmed_items": 2, "repurchase_sales": 1, "repurchase_items": 2}
+    assert metrics.json() == {"confirmed_sales": 1, "regular_sales": 0, "confirmed_items": 2, "repurchase_sales": 1, "repurchase_items": 2, "total_revenue": "2.00", "regular_revenue": "0.00", "repurchase_revenue": "2.00"}
     supervisor = user(db, "metrics-supervisor@example.com", "SUPERVISOR")
     assert client.get("/api/v1/sales/me/metrics", headers=headers(client, supervisor.email)).status_code == 403
+
+
+def test_reports_treat_legacy_missing_sale_item_price_as_zero(client: TestClient, db: Session) -> None:
+    advisor, customer, product, supervisor_auth = customer_and_product(client, db)
+    sale = client.post(
+        "/api/v1/sales", headers=headers(client, advisor.email),
+        json={"customer_id": customer["id"], "sale_date": "2026-01-10", "acquisition_channel": "TV", "items": [{"product_id": product["id"], "quantity": 2}]},
+    ).json()
+    db.get(SaleItem, sale["items"][0]["id"]).unit_price = None
+    db.commit()
+    metrics = client.get("/api/v1/reports/metrics", headers=supervisor_auth)
+    assert metrics.status_code == 200
+    assert metrics.json()["total_revenue"] == "0"
+    assert client.get("/api/v1/reports/operation.xlsx", headers=supervisor_auth).status_code == 200
 
 
 def test_supervisor_can_register_one_replacement_for_annulled_sale(client: TestClient, db: Session) -> None:
@@ -130,6 +157,7 @@ def test_supervisor_edits_and_hard_deletes_sale_with_alert_dependents(client: Te
     })
     assert edited.status_code == 200
     assert edited.json()["items"][0]["expected_repurchase_date"] == "2026-02-11"
+    assert edited.json()["items"][0]["unit_price"] == "1.00"
     alert = Alert(sale_item_id=edited.json()["items"][0]["id"], alert_date=date(2026, 2, 11), expected_repurchase_date=date(2026, 2, 11))
     db.add(alert)
     db.flush()
@@ -138,12 +166,23 @@ def test_supervisor_edits_and_hard_deletes_sale_with_alert_dependents(client: Te
     linked_sale = Sale(customer_id=customer["id"], advisor_id=advisor.id, sale_date=date(2026, 3, 1), status="RECHAZADA_DUPLICADO", source_alert_id=alert_id)
     db.add(linked_sale)
     db.commit()
+    blocked = client.patch(
+        f"/api/v1/sales/{sale['id']}", headers=supervisor_auth,
+        json={"sale_date": "2026-01-13", "items": [{"product_id": product["id"], "quantity": 3}]},
+    )
+    assert blocked.status_code == 409
+    assert "annul and register a replacement" in blocked.json()["detail"]
+    assert db.query(SaleItem).filter_by(sale_id=sale["id"]).count() == 1
+    assert db.query(Alert).filter_by(id=alert_id).count() == 1
+    assert db.query(AlertContactAttempt).filter_by(alert_id=alert_id).count() == 1
+    assert db.get(Sale, linked_sale.id).source_alert_id == alert_id
     assert client.delete(f"/api/v1/sales/{sale['id']}", headers=advisor_auth).status_code == 403
     assert client.delete(f"/api/v1/sales/{sale['id']}", headers=supervisor_auth).status_code == 204
     assert db.get(Sale, sale["id"]) is None
     assert db.query(SaleItem).filter_by(sale_id=sale["id"]).count() == 0
     assert db.query(Alert).filter_by(id=alert_id).count() == 0
     assert db.query(AlertContactAttempt).filter_by(alert_id=alert_id).count() == 0
+    db.expire_all()
     assert db.get(Sale, linked_sale.id).source_alert_id is None
     audit = db.query(AuditLog).filter_by(entity_type="sale", entity_id=sale["id"], action="HARD_DELETED").one()
     assert audit.before_data["notes"] == "Corrected"

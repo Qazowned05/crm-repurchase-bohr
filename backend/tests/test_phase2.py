@@ -54,17 +54,61 @@ def test_customer_segmentation_is_optional_and_returned(client: TestClient, db: 
         headers=auth,
         json={
             "dni": "70000002", "first_names": "Beatriz", "last_names": "Luna", "phone": "988888888",
-            "condition": "Hipertensión", "birth_year": 1984, "sales_district": "Miraflores",
+            "condition": "Hipertensión", "birth_date": "1984-03-10",
+            "department": "LIMA", "province": "LIMA", "district": "MIRAFLORES", "ubigeo": "150122",
         },
     )
 
     assert created.status_code == 201
     assert created.json()["condition"] == "Hipertensión"
-    assert created.json()["birth_year"] == 1984
-    assert created.json()["sales_district"] == "Miraflores"
-    updated = client.patch(f"/api/v1/customers/{created.json()['id']}", headers=auth, json={"sales_district": "San Isidro"})
+    assert created.json()["birth_date"] == "1984-03-10"
+    assert created.json()["district"] == "MIRAFLORES"
+    partial = client.patch(f"/api/v1/customers/{created.json()['id']}", headers=auth, json={"district": "SAN ISIDRO"})
+    assert partial.status_code == 422
+    updated = client.patch(f"/api/v1/customers/{created.json()['id']}", headers=auth, json={
+        "department": "LIMA", "province": "LIMA", "district": "SAN ISIDRO", "ubigeo": "150131",
+    })
     assert updated.status_code == 200
-    assert updated.json()["sales_district"] == "San Isidro"
+    assert updated.json()["district"] == "SAN ISIDRO"
+
+
+def test_supervisor_customer_assignment_makes_customer_visible_to_advisor(client: TestClient, db: Session) -> None:
+    supervisor = user(db, "supervisor-customer@example.com", "SUPERVISOR")
+    advisor = user(db, "portfolio-customer@example.com", "ASESOR")
+    created = client.post(
+        "/api/v1/customers",
+        headers=headers(client, supervisor.email),
+        json={
+            "dni": "70000003", "first_names": "Carmen", "last_names": "Rios", "phone": "977777777",
+            "responsible_advisor_id": advisor.id,
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["responsible_advisor_id"] == advisor.id
+    visible = client.get("/api/v1/customers", headers=headers(client, advisor.email))
+    assert [customer["id"] for customer in visible.json()] == [created.json()["id"]]
+
+
+def test_active_customer_is_available_for_sales_without_changing_portfolio(client: TestClient, db: Session) -> None:
+    supervisor = user(db, "supervisor-sales-options@example.com", "SUPERVISOR")
+    owner = user(db, "owner-sales-options@example.com", "ASESOR")
+    seller = user(db, "seller-sales-options@example.com", "ASESOR")
+    created = client.post(
+        "/api/v1/customers",
+        headers=headers(client, supervisor.email),
+        json={
+            "dni": "70000004", "first_names": "Diana", "last_names": "Vega", "phone": "966666666",
+            "responsible_advisor_id": owner.id,
+        },
+    ).json()
+
+    portfolio = client.get("/api/v1/customers", headers=headers(client, seller.email))
+    sale_options = client.get("/api/v1/customers/sale-options", headers=headers(client, seller.email))
+    assert portfolio.json() == []
+    assert sale_options.json() == []
+    owner_options = client.get("/api/v1/customers/sale-options", headers=headers(client, owner.email))
+    assert [customer["id"] for customer in owner_options.json()] == [created["id"]]
 
 
 def test_supervisor_creates_product_and_versioned_rule(client: TestClient, db: Session) -> None:

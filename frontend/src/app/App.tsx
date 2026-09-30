@@ -8,6 +8,7 @@ import { Maintenance } from "../features/maintenance/Maintenance";
 import { Configuration } from "../features/configuration/Configuration";
 import { Sales } from "../features/sales/Sales";
 import { AlertRegister } from "../features/alerts/AlertRegister";
+import { Operations } from "../features/operations/Operations";
 type View =
   | "dashboard"
   | "sales"
@@ -16,7 +17,8 @@ type View =
   | "customers"
   | "products"
   | "users"
-  | "configuration";
+  | "configuration"
+  | "operations";
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<View>("dashboard");
@@ -46,6 +48,7 @@ export function App() {
   if (supervisor)
     nav.push(
       ["recovery", "Recuperación"],
+      ["operations", "Importaciones y reportes"],
       ["customers", "Clientes"],
       ["products", "Productos"],
       ["configuration", "Tipificaciones"],
@@ -66,6 +69,8 @@ export function App() {
       )
     ) : view === "configuration" ? (
       <Configuration />
+    ) : view === "operations" ? (
+      <Operations />
     ) : (
       <Maintenance kind={view} user={user} />
     );

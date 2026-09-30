@@ -13,13 +13,14 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api } from "../../services/api";
+import { api, listAll } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { Modal } from "../../components/Modal";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import type {
   Alert,
   AlertRepurchaseCreate,
+  AdvisorSalesMetrics,
   Metrics,
   Paged,
   Product,
@@ -30,6 +31,7 @@ import type {
 
 type RepurchaseSelection = "ORIGINAL" | "OTHER" | "BOTH";
 type ExtraRepurchaseLine = RepurchaseItem;
+type AlertSummary = { total: number; unmanaged: number; due_today: number; overdue: number };
 
 function alertStatusClass(status: string) {
   return `status alert-status-${status.toLowerCase().replaceAll("_", "-")}`;
@@ -49,6 +51,7 @@ function daysSince(date?: string | null) {
 }
 
 export function Dashboard({ user }: { user: User }) {
+  const currentMonthStart = `${new Date().toISOString().slice(0, 8)}01`;
   const [alertPage, setAlertPage] = useState<Paged<Alert>>({
     items: [],
     page: 1,
@@ -57,6 +60,7 @@ export function Dashboard({ user }: { user: User }) {
     pages: 0,
   });
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [advisorMetrics, setAdvisorMetrics] = useState<AdvisorSalesMetrics | null>(null);
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [typifications, setTypifications] = useState<TypificationTree[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -72,21 +76,29 @@ export function Dashboard({ user }: { user: User }) {
   const [managementError, setManagementError] = useState("");
   const [managementSuccess, setManagementSuccess] = useState("");
   const [alertError, setAlertError] = useState("");
+  const [alertSummary, setAlertSummary] = useState<AlertSummary>({
+    total: 0,
+    unmanaged: 0,
+    due_today: 0,
+    overdue: 0,
+  });
+  const [alertFilters, setAlertFilters] = useState({ q: "", status: "", priority: "" });
   useEffect(() => {
-    api<Paged<Alert> | Alert[]>(`/alerts/inbox?page=1&page_size=${PAGE_SIZE}`)
-      .then((value) => setAlertPage(asPaged(value)))
-      .catch(() => setAlertError("No es posible mostrar las alertas en este momento."));
+    loadAlerts(1).catch(() => setAlertError("No es posible mostrar las alertas en este momento."));
     if (user.role !== "ASESOR") {
       api<Metrics>("/reports/metrics")
         .then(setMetrics)
         .catch(() => {});
     }
     if (user.role === "ASESOR") {
+      api<AdvisorSalesMetrics>(`/sales/me/metrics?date_from=${currentMonthStart}`)
+        .then(setAdvisorMetrics)
+        .catch(() => {});
       api<TypificationTree[]>("/configuration/contact-typifications/tree")
         .then(setTypifications)
         .catch(() => {});
-      api<Paged<Product> | Product[]>("/products?page=1&page_size=200")
-        .then((value) => setProducts(asPaged(value).items.filter((product) => product.is_active)))
+      listAll<Product>("/products")
+        .then((value) => setProducts(value.filter((product) => product.is_active)))
         .catch(() => {});
     }
   }, [user.role]);
@@ -96,10 +108,16 @@ export function Dashboard({ user }: { user: User }) {
     const customerKey = alert.customer_id || alert.customer_dni || alert.id;
     alertsByCustomer.set(customerKey, [...(alertsByCustomer.get(customerKey) || []), alert]);
   });
-  const loadAlerts = (page: number) =>
-    api<Paged<Alert> | Alert[]>(`/alerts/inbox?page=${page}&page_size=${PAGE_SIZE}`).then((value) =>
-      setAlertPage(asPaged(value, page)),
-    );
+  const loadAlerts = (page = 1, active = alertFilters) => {
+    const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+    Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
+    return api<Paged<Alert> | Alert[]>(`/alerts/inbox?${query}`).then((alerts) => {
+      setAlertPage(asPaged(alerts, page));
+      return api<AlertSummary>(`/alerts/inbox-summary?${query}`)
+        .then(setAlertSummary)
+        .catch(() => {});
+    });
+  };
   const rootTypifications = typifications.filter((item) => item.is_active);
   const selectedParent = rootTypifications.find((item) => item.id === parentTypificationId);
   const childTypifications = selectedParent?.children.filter((item) => item.is_active) || [];
@@ -144,13 +162,8 @@ export function Dashboard({ user }: { user: User }) {
             ? extraRepurchaseLines
             : []),
         ];
-        if (
-          !items.length ||
-          items.some((item) => !item.product_id || item.quantity <= 0)
-        ) {
-          setManagementError(
-            "Completa producto y cantidad para cada línea de recompra.",
-          );
+        if (!items.length || items.some((item) => !item.product_id || item.quantity <= 0)) {
+          setManagementError("Completa producto y cantidad para cada línea de recompra.");
           return;
         }
         if (new Set(items.map((item) => item.product_id)).size !== items.length) {
@@ -182,7 +195,11 @@ export function Dashboard({ user }: { user: User }) {
       );
       closeAlert();
       await loadAlerts(alertPage.page);
-      if (user.role !== "ASESOR")
+      if (user.role === "ASESOR")
+        api<AdvisorSalesMetrics>(`/sales/me/metrics?date_from=${currentMonthStart}`)
+          .then(setAdvisorMetrics)
+          .catch(() => {});
+      else
         api<Metrics>("/reports/metrics")
           .then(setMetrics)
           .catch(() => {});
@@ -202,68 +219,103 @@ export function Dashboard({ user }: { user: User }) {
         <p>{new Intl.DateTimeFormat("es-PE", { dateStyle: "full" }).format(new Date())}</p>
       </div>
       {managementSuccess && <p className="success-message">{managementSuccess}</p>}
-      {user.role === "ASESOR" ? (
-        <section className="stats">
-          <StatCard label="Alertas activas" value={alertPage.total} />
+      {user.role !== "ASESOR" && (
+        <section className="stats supervisor-stats">
           <StatCard
-            label="Para hoy"
-            value={alerts.filter((a) => a.next_action_date === new Date().toISOString().slice(0, 10)).length}
+            label="Facturación total"
+            value={metrics ? formatCurrency(metrics.total_revenue) : "-"}
+            accent="green"
+          />
+          <StatCard
+            label="Ingreso por recompra"
+            value={metrics ? formatCurrency(metrics.repurchase_revenue) : "-"}
+            accent="purple"
+          />
+          <StatCard label="Unidades vendidas" value={metrics ? metrics.total_units_sold : "-"} />
+          <StatCard
+            label="Ticket promedio"
+            value={metrics ? formatCurrency(metrics.average_ticket) : "-"}
             accent="orange"
           />
-          <StatCard label="Atendidas" value={alerts.filter((a) => a.attempts_count > 0).length} accent="green" />
-          <StatCard label="Tasa de recompra" value="-" accent="purple" />
-        </section>
-      ) : (
-        <section className="stats supervisor-stats">
-          <StatCard label="Facturación total" value={metrics ? formatCurrency(metrics.total_revenue) : "-"} accent="green" />
-          <StatCard label="Ingreso por recompra" value={metrics ? formatCurrency(metrics.repurchase_revenue) : "-"} accent="purple" />
-          <StatCard label="Unidades vendidas" value={metrics ? metrics.total_units_sold : "-"} />
-          <StatCard label="Ticket promedio" value={metrics ? formatCurrency(metrics.average_ticket) : "-"} accent="orange" />
         </section>
       )}
       {user.role !== "ASESOR" && (
         <section className="dashboard-grid supervisor-dashboard-grid">
           <article className="panel">
-            <h2>Top 4 por unidades vendidas</h2>
+            <h2>Ventas por producto</h2>
             {metrics?.top_products_by_units.length ? (
-              <div className="product-chart">
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart layout="vertical" data={metrics.top_products_by_units} margin={{ top: 4, right: 32, left: 8, bottom: 0 }}>
+              <div className="product-chart product-ranking-chart">
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart
+                    layout="vertical"
+                    data={metrics.top_products_by_units}
+                    margin={{ top: 4, right: 32, left: 8, bottom: 0 }}
+                  >
                     <CartesianGrid stroke="#dce5ec" horizontal={false} />
                     <XAxis type="number" allowDecimals={false} hide />
-                    <YAxis dataKey="product_name" type="category" width={130} tick={{ fill: "#526b7d", fontSize: 11 }} />
+                    <YAxis
+                      dataKey="product_name"
+                      type="category"
+                      width={130}
+                      tick={{ fill: "#526b7d", fontSize: 11 }}
+                    />
                     <Tooltip
                       cursor={{ fill: "#f0f6fa" }}
                       formatter={(value) => [`${value} uds.`, "Unidades"]}
                     />
                     <Bar dataKey="units" fill="#005a9c" radius={[0, 2, 2, 0]}>
-                      <LabelList dataKey="units" position="right" formatter={(value) => `${value} uds.`} fill="#29475e" fontSize={11} />
+                      <LabelList
+                        dataKey="units"
+                        position="right"
+                        formatter={(value) => `${value} uds.`}
+                        fill="#29475e"
+                        fontSize={11}
+                      />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            ) : <p>Sin ventas registradas.</p>}
+            ) : (
+              <p>Sin ventas registradas.</p>
+            )}
           </article>
           <article className="panel">
-            <h2>Top 4 por facturación</h2>
+            <h2>Facturación por producto</h2>
             {metrics?.top_products_by_revenue.length ? (
-              <div className="product-chart">
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart layout="vertical" data={metrics.top_products_by_revenue} margin={{ top: 4, right: 50, left: 8, bottom: 0 }}>
+              <div className="product-chart product-ranking-chart">
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart
+                    layout="vertical"
+                    data={metrics.top_products_by_revenue}
+                    margin={{ top: 4, right: 50, left: 8, bottom: 0 }}
+                  >
                     <CartesianGrid stroke="#dce5ec" horizontal={false} />
                     <XAxis type="number" hide />
-                    <YAxis dataKey="product_name" type="category" width={130} tick={{ fill: "#526b7d", fontSize: 11 }} />
+                    <YAxis
+                      dataKey="product_name"
+                      type="category"
+                      width={130}
+                      tick={{ fill: "#526b7d", fontSize: 11 }}
+                    />
                     <Tooltip
                       cursor={{ fill: "#edf7f2" }}
                       formatter={(value) => [formatCurrency(Number(value)), "Facturación"]}
                     />
                     <Bar dataKey="revenue" fill="#00734d" radius={[0, 2, 2, 0]}>
-                      <LabelList dataKey="revenue" position="right" formatter={(value) => formatCurrency(Number(value))} fill="#29475e" fontSize={11} />
+                      <LabelList
+                        dataKey="revenue"
+                        position="right"
+                        formatter={(value) => formatCurrency(Number(value))}
+                        fill="#29475e"
+                        fontSize={11}
+                      />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            ) : <p>Sin ventas registradas.</p>}
+            ) : (
+              <p>Sin ventas registradas.</p>
+            )}
           </article>
           <article className="panel advisors">
             <h2>Ranking de asesores</h2>
@@ -275,19 +327,37 @@ export function Dashboard({ user }: { user: User }) {
                     <span className="avatar">{advisor.advisor_name[0]}</span>
                     <span className="ranking-advisor">
                       <b>{advisor.advisor_name}</b>
-                      <small>{advisor.confirmed_repurchases} recompras · {advisor.managed_alerts} alertas gestionadas</small>
+                      <small>
+                        {advisor.confirmed_repurchases} recompras · {advisor.managed_alerts} alertas
+                        gestionadas
+                      </small>
                     </span>
-                    <b className="ranking-revenue">{formatCurrency(advisor.repurchase_revenue)}</b>
+                    <span className="ranking-revenue">
+                      <span>
+                        <small>Regular</small>
+                        <b>{formatCurrency(advisor.regular_revenue)}</b>
+                      </span>
+                      <span>
+                        <small>Recompra</small>
+                        <b>{formatCurrency(advisor.repurchase_revenue)}</b>
+                      </span>
+                      <span>
+                        <small>Total</small>
+                        <b>{formatCurrency(advisor.total_revenue)}</b>
+                      </span>
+                    </span>
                   </li>
                 ))}
               </ol>
-            ) : <p>No hay actividad de asesores en el periodo.</p>}
+            ) : (
+              <p>No hay actividad de asesores en el periodo.</p>
+            )}
           </article>
           <article className="panel revenue-comparison-panel">
             <h2>Ingresos: ventas regulares vs recompras</h2>
             {metrics ? (
               <div className="product-chart">
-                <ResponsiveContainer width="100%" height={200}>
+                <ResponsiveContainer width="100%" height={360}>
                   <PieChart>
                     <Pie
                       data={[
@@ -298,113 +368,285 @@ export function Dashboard({ user }: { user: User }) {
                       nameKey="name"
                       cx="50%"
                       cy="45%"
-                      innerRadius={48}
-                      outerRadius={76}
+                      innerRadius={76}
+                      outerRadius={118}
                       paddingAngle={3}
                     >
                       <Cell fill="#005a9c" />
                       <Cell fill="#00734d" />
                     </Pie>
                     <Tooltip formatter={(value) => [formatCurrency(Number(value)), "Ingresos"]} />
-                    <Legend verticalAlign="bottom" iconType="circle" formatter={(value) => <span className="pie-legend">{value}</span>} />
+                    <Legend
+                      verticalAlign="bottom"
+                      iconType="circle"
+                      formatter={(value) => <span className="pie-legend">{value}</span>}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
-            ) : <p>Sin ventas registradas.</p>}
+            ) : (
+              <p>Sin ventas registradas.</p>
+            )}
           </article>
         </section>
       )}
       {user.role === "ASESOR" ? (
-        <section className="panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Mis alertas</h2>
-              <p>Selecciona una alerta para revisar el cliente y registrar la gestión.</p>
+        <>
+          <section className="stats advisor-alert-stats">
+            <StatCard label="Para hoy" value={alertSummary.due_today} accent="orange" />
+            <StatCard label="Sin gestión" value={alertSummary.unmanaged} accent="purple" />
+            <StatCard label="Fuera de fecha" value={alertSummary.overdue} accent="green" />
+            <StatCard label="Recompras del mes" value={advisorMetrics?.repurchase_sales ?? "-"} />
+          </section>
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Mis alertas</h2>
+                <p>Selecciona una alerta para revisar el cliente y registrar la gestión.</p>
+              </div>
+              <span className="header-metric">
+                <b>{alertPage.total}</b> activas
+              </span>
             </div>
-            <span className="header-metric">
-              <b>{alerts.length}</b> activas
-            </span>
-          </div>
-          <div className="alert-list">
-            {Array.from(alertsByCustomer.values()).map((customerAlerts) => {
-              const customer = customerAlerts[0];
-              return (
-                <section className="alert-customer-group" key={customer.customer_id || customer.id}>
-                  <header>
-                    <span>
-                      <b>
-                        {customer.customer_first_names} {customer.customer_last_names}
-                      </b>
-                      <small>{customer.customer_dni ? `DNI ${customer.customer_dni}` : ""}</small>
-                    </span>
-                    <small>
-                      {customerAlerts.length} {customerAlerts.length === 1 ? "alerta" : "alertas"}
-                    </small>
-                  </header>
-                  {customerAlerts.map((alert) => (
-                    <button className="alert-row" key={alert.id} onClick={() => openAlert(alert)}>
+            <form
+              className="alert-inbox-filters"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setAlertError("");
+                loadAlerts(1).catch(() => setAlertError("No fue posible actualizar las alertas."));
+              }}
+            >
+              <label>
+                Buscar
+                <input
+                  placeholder="Cliente, DNI o teléfono"
+                  value={alertFilters.q}
+                  onChange={(event) =>
+                    setAlertFilters((value) => ({ ...value, q: event.target.value }))
+                  }
+                />
+              </label>
+              <label>
+                Estado
+                <select
+                  value={alertFilters.status}
+                  onChange={(event) =>
+                    setAlertFilters((value) => ({ ...value, status: event.target.value }))
+                  }
+                >
+                  <option value="">Todos</option>
+                  <option value="PENDIENTE">Pendiente</option>
+                  <option value="REASIGNADO">Reasignada</option>
+                  <option value="REPROGRAMADO">Reprogramada</option>
+                  <option value="SIN_RESPUESTA">Sin respuesta</option>
+                </select>
+              </label>
+              <label>
+                Prioridad
+                <select
+                  value={alertFilters.priority}
+                  onChange={(event) =>
+                    setAlertFilters((value) => ({ ...value, priority: event.target.value }))
+                  }
+                >
+                  <option value="">Todas</option>
+                  <option value="VENCIDA">Fuera de fecha</option>
+                  <option value="HOY">Para hoy</option>
+                  <option value="PROXIMA">Próximas</option>
+                  <option value="SIN_GESTION">Sin gestión</option>
+                </select>
+              </label>
+              <button>Filtrar alertas</button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  const reset = { q: "", status: "", priority: "" };
+                  setAlertFilters(reset);
+                  loadAlerts(1, reset).catch(() =>
+                    setAlertError("No fue posible actualizar las alertas."),
+                  );
+                }}
+              >
+                Limpiar
+              </button>
+            </form>
+            <div className="alert-list">
+              {Array.from(alertsByCustomer.values()).map((customerAlerts) => {
+                const customer = customerAlerts[0];
+                return (
+                  <section
+                    className="alert-customer-group"
+                    key={customer.customer_id || customer.id}
+                  >
+                    <header>
                       <span>
-                        <b>{alert.product_name || alert.product_code || "Producto"}</b>
-                        <small>Vence {alert.expected_repurchase_date}</small>
-                        <small>
-                          {alert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
-                          {alert.assignment_reason ? ` · ${alert.assignment_reason}` : ""}
-                          {alert.next_action_date ? ` · Próxima acción: ${alert.next_action_date}` : ""}
-                        </small>
+                        <b>
+                          {customer.customer_first_names} {customer.customer_last_names}
+                        </b>
+                        <small>{customer.customer_dni ? `DNI ${customer.customer_dni}` : ""}</small>
                       </span>
-                      <span className={alertStatusClass(alert.status)}>{alert.status.replaceAll("_", " ")}</span>
-                      <span>Gestionar</span>
-                    </button>
-                  ))}
-                </section>
-              );
-            })}
-            {!alerts.length && <p>No hay alertas activas.</p>}
-            {alertError && <p className="form-error">{alertError}</p>}
-          </div>
-          <Pagination data={alertPage} onPageChange={(page) => loadAlerts(page).catch(() => {})} />
-        </section>
+                      <small>
+                        {customerAlerts.length} {customerAlerts.length === 1 ? "alerta" : "alertas"}
+                      </small>
+                    </header>
+                    {customerAlerts.map((alert) => (
+                      <button className="alert-row" key={alert.id} onClick={() => openAlert(alert)}>
+                        <span>
+                          <b>{alert.product_name || alert.product_code || "Producto"}</b>
+                          <small>Vence {alert.expected_repurchase_date}</small>
+                          <small>
+                            {alert.alert_type === "AUTOMATICA" || !alert.alert_type
+                              ? "Generada por vencimiento de compra"
+                              : alert.alert_type.replaceAll("_", " ")}
+                            {alert.assignment_reason ? ` · ${alert.assignment_reason}` : ""}
+                            {alert.next_action_date
+                              ? ` · Próxima acción: ${alert.next_action_date}`
+                              : ""}
+                          </small>
+                        </span>
+                        <span className={alertStatusClass(alert.status)}>
+                          {alert.status.replaceAll("_", " ")}
+                        </span>
+                        <span>Gestionar</span>
+                      </button>
+                    ))}
+                  </section>
+                );
+              })}
+              {!alerts.length && <p>No hay alertas activas.</p>}
+              {alertError && <p className="form-error">{alertError}</p>}
+            </div>
+            <Pagination
+              data={alertPage}
+              onPageChange={(page) => loadAlerts(page).catch(() => {})}
+            />
+          </section>
+        </>
       ) : (
-        <section className="panel">
-          <h2>Próximos vencimientos</h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Fecha</th>
-                  <th>Cliente / producto</th>
-                  <th>Estado</th>
-                  <th>Intentos</th>
-                  <th>Asignado</th>
-                  <th>Desde venta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alerts.slice(0, 7).map((a) => (
-                  <tr key={a.id}>
-                    <td>{a.expected_repurchase_date}</td>
-                    <td>
-                      <b>{[a.customer_first_names, a.customer_last_names].filter(Boolean).join(" ") || "Sin cliente"}</b>
-                      <span className="table-detail">{a.product_name || a.product_code || "Sin producto"}</span>
-                    </td>
-                    <td>
-                      <span className={alertStatusClass(a.status)}>{a.status.replaceAll("_", " ")}</span>
-                    </td>
-                    <td>{a.attempts_count}</td>
-                    <td>{a.assigned_advisor_name || "Sin asignar"}</td>
-                    <td>{daysSince(a.original_sale_date)} días</td>
-                  </tr>
-                ))}
-                {!alerts.length && (
+        <>
+          <section className="panel filters">
+            <div className="panel-heading">
+              <div>
+                <h2>Filtros de alertas</h2>
+                <p>Filtra la bandeja de alertas activas del equipo.</p>
+              </div>
+              <button
+                className="secondary"
+                onClick={() => {
+                  const reset = { q: "", status: "", priority: "" };
+                  setAlertFilters(reset);
+                  loadAlerts(1, reset).catch(() =>
+                    setAlertError("No fue posible actualizar las alertas."),
+                  );
+                }}
+              >
+                Limpiar
+              </button>
+            </div>
+            <form
+              className="alert-inbox-filters"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setAlertError("");
+                loadAlerts(1).catch(() => setAlertError("No fue posible actualizar las alertas."));
+              }}
+            >
+              <label>
+                Buscar
+                <input
+                  placeholder="Cliente, DNI o teléfono"
+                  value={alertFilters.q}
+                  onChange={(event) =>
+                    setAlertFilters((value) => ({ ...value, q: event.target.value }))
+                  }
+                />
+              </label>
+              <label>
+                Estado
+                <select
+                  value={alertFilters.status}
+                  onChange={(event) =>
+                    setAlertFilters((value) => ({ ...value, status: event.target.value }))
+                  }
+                >
+                  <option value="">Todos</option>
+                  <option value="PENDIENTE">Pendiente</option>
+                  <option value="REASIGNADO">Reasignada</option>
+                  <option value="REPROGRAMADO">Reprogramada</option>
+                  <option value="SIN_RESPUESTA">Sin respuesta</option>
+                </select>
+              </label>
+              <label>
+                Prioridad
+                <select
+                  value={alertFilters.priority}
+                  onChange={(event) =>
+                    setAlertFilters((value) => ({ ...value, priority: event.target.value }))
+                  }
+                >
+                  <option value="">Todas</option>
+                  <option value="VENCIDA">Fuera de fecha</option>
+                  <option value="HOY">Para hoy</option>
+                  <option value="PROXIMA">Próximas</option>
+                  <option value="SIN_GESTION">Sin gestión</option>
+                </select>
+              </label>
+              <button>Filtrar alertas</button>
+            </form>
+          </section>
+          <section className="panel">
+            <h2>Próximos vencimientos</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
                   <tr>
-                    <td colSpan={6}>No hay alertas activas.</td>
+                    <th>Fecha</th>
+                    <th>Cliente / producto</th>
+                    <th>Estado</th>
+                    <th>Intentos</th>
+                    <th>Asignado</th>
+                    <th>Desde venta</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <Pagination data={alertPage} onPageChange={(page) => loadAlerts(page).catch(() => {})} />
-        </section>
+                </thead>
+                <tbody>
+                  {alerts.slice(0, 7).map((a) => (
+                    <tr key={a.id}>
+                      <td>{a.expected_repurchase_date}</td>
+                      <td>
+                        <b>
+                          {[a.customer_first_names, a.customer_last_names]
+                            .filter(Boolean)
+                            .join(" ") || "Sin cliente"}
+                        </b>
+                        <span className="table-detail">
+                          {a.product_name || a.product_code || "Sin producto"}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={alertStatusClass(a.status)}>
+                          {a.status.replaceAll("_", " ")}
+                        </span>
+                      </td>
+                      <td>{a.attempts_count}</td>
+                      <td>{a.assigned_advisor_name || "Sin asignar"}</td>
+                      <td>{daysSince(a.original_sale_date)} días</td>
+                    </tr>
+                  ))}
+                  {!alerts.length && (
+                    <tr>
+                      <td colSpan={6}>No hay alertas activas.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              data={alertPage}
+              onPageChange={(page) => loadAlerts(page).catch(() => {})}
+            />
+          </section>
+        </>
       )}
       {selectedAlert && (
         <Modal title="Gestionar alerta" onClose={closeAlert}>
@@ -492,7 +734,8 @@ export function Dashboard({ user }: { user: User }) {
                 </p>
                 {repurchaseSelection === "OTHER" && (
                   <p className="repurchase-info-banner repurchase-recovery-note">
-                    La alerta del producto original quedará en recuperación para seguimiento posterior.
+                    La alerta del producto original quedará en recuperación para seguimiento
+                    posterior.
                   </p>
                 )}
                 <fieldset className="repurchase-product-choice">

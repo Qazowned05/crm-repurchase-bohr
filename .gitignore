@@ -13,3 +13,6 @@ htmlcov/
 backend/.alembic/
 front_example/
 frontend_reference/
+
+# Operational notes and planning documents stay local; BPMN models remain versioned.
+*.md

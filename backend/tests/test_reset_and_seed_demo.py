@@ -41,13 +41,11 @@ def test_demo_45_seed_uses_valid_model_fields_and_expected_counts(db: Session) -
     assert count(db, CustomerAssignmentHistory) == EXPECTED_COUNTS["customer_assignment_history"]
     assert count(db, AlertAssignmentHistory) == EXPECTED_COUNTS["alert_assignment_history"]
     assert count(db, Alert) == 45 * 5
-    assert count(db, AlertContactAttempt) == 45 * 3
+    assert count(db, AlertContactAttempt) == 115
     assert count(db, Sale) == 225 + 45
     assert count(db, Sale) == db.scalar(select(func.count()).select_from(Sale).where(Sale.status == "CONFIRMADA"))
     assert db.scalar(select(func.count()).select_from(Sale).where(Sale.source_alert_id.is_not(None))) == 45
     assert db.scalar(select(func.count()).select_from(SaleItem).where(SaleItem.purchase_type == "RECOMPRA")) == 45
-    assert count(db, Alert) == db.scalar(select(func.count()).select_from(Alert).where(Alert.status.in_({
-        "PENDIENTE", "VENCIDO_NO_GESTIONADO", "REPROGRAMADO", "CERRADO_POR_TIPIFICACION", "RECOMPRA_LOGRADA",
-    })))
-    for status in ("PENDIENTE", "VENCIDO_NO_GESTIONADO", "REPROGRAMADO", "CERRADO_POR_TIPIFICACION", "RECOMPRA_LOGRADA"):
-        assert db.scalar(select(func.count()).select_from(Alert).where(Alert.status == status)) == 45
+    expected_statuses = {"PENDIENTE": 45, "VENCIDO_NO_GESTIONADO": 45, "REPROGRAMADO": 45, "REASIGNADO": 20, "SIN_RESPUESTA": 10, "CERRADO_POR_TIPIFICACION": 15, "RECOMPRA_LOGRADA": 45}
+    for status, expected_count in expected_statuses.items():
+        assert db.scalar(select(func.count()).select_from(Alert).where(Alert.status == status)) == expected_count

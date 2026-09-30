@@ -22,6 +22,8 @@ class SaleCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_channel_detail(self) -> "SaleCreate":
+        if self.source_alert_id is not None:
+            raise ValueError("Use the alert repurchase endpoint to associate a sale with an alert")
         if self.acquisition_channel == "OTROS" and not (self.acquisition_channel_detail or "").strip():
             raise ValueError("Acquisition channel detail is required for OTROS")
         if self.acquisition_channel != "OTROS" and self.acquisition_channel_detail is not None:
@@ -61,9 +63,13 @@ class AnnulSaleCreate(BaseModel):
 
 class AdvisorSalesMetricsResponse(BaseModel):
     confirmed_sales: int
+    regular_sales: int
     confirmed_items: int
     repurchase_sales: int
     repurchase_items: int
+    total_revenue: Decimal
+    regular_revenue: Decimal
+    repurchase_revenue: Decimal
 
 
 class SaleItemResponse(BaseModel):

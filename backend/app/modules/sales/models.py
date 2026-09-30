@@ -19,6 +19,7 @@ class Sale(Base):
     status: Mapped[str] = mapped_column(String(40), default="CONFIRMADA", index=True)
     acquisition_channel: Mapped[str | None] = mapped_column(String(20), nullable=True)
     acquisition_channel_detail: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_reference: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True, index=True)
     replaces_sale_id: Mapped[str | None] = mapped_column(
         ForeignKey("sales.id", ondelete="RESTRICT"), nullable=True, unique=True, index=True
     )

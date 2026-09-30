@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import case, or_, select
+from sqlalchemy import and_, case, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -59,6 +59,18 @@ def apply_alert_filters(query, q: str | None, product_id: str | None, alert_stat
     return query
 
 
+def apply_priority_filter(query, priority: str | None, today: date):
+    if priority == "VENCIDA":
+        return query.where(or_(Alert.next_action_date < today, and_(Alert.next_action_date.is_(None), Alert.alert_date < today)))
+    if priority == "HOY":
+        return query.where(or_(Alert.next_action_date == today, and_(Alert.next_action_date.is_(None), Alert.alert_date == today)))
+    if priority == "PROXIMA":
+        return query.where(or_(Alert.next_action_date > today, and_(Alert.next_action_date.is_(None), Alert.alert_date > today)))
+    if priority == "SIN_GESTION":
+        return query.where(Alert.attempts_count == 0)
+    return query
+
+
 @router.post("/{alert_id}/repurchase", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
 def register_repurchase(
     alert_id: str,
@@ -103,7 +115,7 @@ def register_repurchase(
         notes=payload.notes.strip() if payload.notes else None,
         acquisition_channel=payload.acquisition_channel.strip().upper() if payload.acquisition_channel else None,
         acquisition_channel_detail=payload.acquisition_channel_detail.strip() if payload.acquisition_channel_detail else None,
-        source_alert_id=alert.id,
+        source_alert_id=alert.id if source_item.product_id in products else None,
     )
     try:
         with db.begin_nested():
@@ -148,6 +160,7 @@ def register_repurchase(
 def inbox(
     q: str | None = None, product_id: str | None = None, alert_status: str | None = Query(default=None, alias="status"),
     alert_type: str | None = Query(default=None, pattern="^(AUTOMATICA|REASIGNADA|SEGUIMIENTO)$"),
+    priority_filter: str | None = Query(default=None, alias="priority", pattern="^(VENCIDA|HOY|PROXIMA|SIN_GESTION)$"),
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
 ) -> list[dict] | dict:
@@ -164,8 +177,28 @@ def inbox(
     query = (advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()).order_by(priority, Alert.next_action_date, Alert.alert_date)
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
-    query = apply_alert_filters(query, q, product_id, alert_status, alert_type)
+    query = apply_priority_filter(apply_alert_filters(query, q, product_id, alert_status, alert_type), priority_filter, today)
     return paginate_items([alert_response(alert, db) for alert in db.scalars(query)], page, page_size)
+
+
+@router.get("/inbox-summary")
+def inbox_summary(
+    q: str | None = None, product_id: str | None = None, alert_status: str | None = Query(default=None, alias="status"),
+    alert_type: str | None = Query(default=None, pattern="^(AUTOMATICA|REASIGNADA|SEGUIMIENTO)$"),
+    priority_filter: str | None = Query(default=None, alias="priority", pattern="^(VENCIDA|HOY|PROXIMA|SIN_GESTION)$"),
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+) -> dict[str, int]:
+    today = date.today()
+    query = advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()
+    if current_user.role == "ASESOR":
+        query = query.where(Alert.assigned_advisor_id == current_user.id)
+    alerts = list(db.scalars(apply_priority_filter(apply_alert_filters(query, q, product_id, alert_status, alert_type), priority_filter, today)))
+    return {
+        "total": len(alerts),
+        "unmanaged": sum(alert.attempts_count == 0 for alert in alerts),
+        "due_today": sum(alert.next_action_date == today or (alert.next_action_date is None and alert.alert_date == today) for alert in alerts),
+        "overdue": sum((alert.next_action_date is not None and alert.next_action_date < today) or (alert.next_action_date is None and alert.alert_date < today) for alert in alerts),
+    }
 
 
 @router.get("/register")

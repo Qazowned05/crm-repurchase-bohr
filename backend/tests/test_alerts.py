@@ -118,7 +118,8 @@ def test_confirmed_repurchase_and_annulment_close_active_alerts(client: TestClie
     client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
     first_alert = db.query(Alert).filter_by(sale_item_id=sale["items"][0]["id"]).one()
     advisor_auth = auth(client, advisor.email)
-    repurchase = client.post("/api/v1/sales", headers=advisor_auth, json={"customer_id": sale["customer_id"], "sale_date": str(date.today()), "source_alert_id": first_alert.id, "items": [{"product_id": product["id"], "quantity": 1}]}).json()
+    assert client.post("/api/v1/sales", headers=advisor_auth, json={"customer_id": sale["customer_id"], "sale_date": str(date.today()), "source_alert_id": first_alert.id, "items": [{"product_id": product["id"], "quantity": 1}]}).status_code == 422
+    repurchase = client.post(f"/api/v1/alerts/{first_alert.id}/repurchase", headers=advisor_auth, json={"sale_date": str(date.today()), "items": [{"product_id": product["id"], "quantity": 1}]}).json()
     db.refresh(first_alert)
     assert first_alert.status == "RECOMPRA_LOGRADA"
     assert first_alert.closure_reason == f"RECOMPRA_CONFIRMADA: venta {repurchase['id']}"
@@ -172,7 +173,7 @@ def test_managed_purchase_of_different_product_keeps_source_alert_recoverable(cl
 
     assert response.status_code == 201
     registered = response.json()
-    assert registered["source_alert_id"] == alert["id"]
+    assert registered["source_alert_id"] is None
     assert registered["advisor_id"] == advisor.id
     item = registered["items"][0]
     assert item["product_id"] == extra["id"]
@@ -192,6 +193,13 @@ def test_managed_purchase_of_different_product_keeps_source_alert_recoverable(cl
     assert reassigned.status_code == 200
     assert reassigned.json()["status"] == "REASIGNADO"
     assert sale["items"][0]["product_id"] != registered["items"][0]["product_id"]
+    corrected = client.post(f"/api/v1/alerts/{alert['id']}/repurchase", headers=auth(client, advisor.email), json={
+        "items": [{"product_id": original["id"], "quantity": 1}],
+    })
+    assert corrected.status_code == 201
+    assert corrected.json()["source_alert_id"] == alert["id"]
+    db.refresh(source)
+    assert source.status == "RECOMPRA_LOGRADA"
 
 
 def test_managed_repurchase_marks_only_included_original_product_as_repurchase(client: TestClient, db: Session) -> None:

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
+import { CustomerModal } from "../../components/CustomerModal";
 import { ConfirmModal, Modal } from "../../components/Modal";
-import { api } from "../../services/api";
+import { api, listAll } from "../../services/api";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import type {
   CatalogItem,
@@ -16,14 +17,19 @@ const definitions = {
   customers: {
     title: "Clientes",
     fields: [
-      { name: "dni", label: "DNI", required: true },
-      { name: "first_names", label: "Nombres", required: true },
-      { name: "last_names", label: "Apellidos", required: true },
-      { name: "phone", label: "Teléfono", required: true },
+      {
+        name: "dni",
+        label: "DNI",
+        required: true,
+        minLength: 6,
+        maxLength: 20,
+        pattern: "[A-Za-z0-9]+",
+      },
+      { name: "first_names", label: "Nombres", required: true, minLength: 2, maxLength: 120 },
+      { name: "last_names", label: "Apellidos", required: true, minLength: 2, maxLength: 120 },
+      { name: "phone", label: "Teléfono", required: true, minLength: 6, maxLength: 30 },
       { name: "email", label: "Correo", type: "email" },
       { name: "condition", label: "Enfermedad o condición" },
-      { name: "birth_year", label: "Año de nacimiento", type: "number" },
-      { name: "sales_district", label: "Distrito de venta" },
     ],
   },
   products: { title: "Productos", fields: [] },
@@ -31,8 +37,16 @@ const definitions = {
     title: "Usuarios",
     fields: [
       { name: "email", label: "Correo", type: "email", required: true },
-      { name: "full_name", label: "Nombre completo", required: true },
-      { name: "password", label: "Contraseña", type: "password", required: true },
+      { name: "full_name", label: "Nombre completo", required: true, minLength: 2 },
+      {
+        name: "password",
+        label: "Contraseña",
+        type: "password",
+        required: true,
+        minLength: 8,
+        maxLength: 128,
+        helpText: "Mínimo 8 caracteres.",
+      },
       {
         name: "role",
         label: "Rol",
@@ -160,14 +174,40 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
         </div>
         <Pagination data={data} onPageChange={(page) => load(page).catch(() => {})} />
       </section>
-      {editing !== undefined && kind !== "products" && (
+      {editing !== undefined && kind === "customers" && (
+        <CustomerModal
+          title={editing ? "Editar cliente" : "Nuevo cliente"}
+          customer={(editing as Customer | null) || undefined}
+          role={user.role}
+          onClose={() => setEditing(undefined)}
+          onSave={async (data) => {
+            await api(`/customers${editing ? `/${editing.id}` : ""}`, {
+              method: editing ? "PATCH" : "POST",
+              body: JSON.stringify(data),
+            });
+            await load();
+          }}
+        />
+      )}
+      {editing !== undefined && kind === "users" && (
         <CrudModal
           title={editing ? `Editar ${kind.slice(0, -1)}` : `Nuevo ${kind.slice(0, -1)}`}
-          fields={d.fields as never}
+          fields={
+            d.fields.map((field) => {
+              if (editing && kind === "users" && field.name === "email")
+                return { ...field, disabled: true, helpText: "El correo no puede modificarse." };
+              if (editing && kind === "users" && field.name === "password")
+                return {
+                  ...field,
+                  required: false,
+                  helpText: "Déjalo vacío para conservar la contraseña actual.",
+                };
+              return field;
+            }) as never
+          }
           initial={editing || {}}
           onClose={() => setEditing(undefined)}
           onSave={async (data) => {
-            if (editing && kind !== "users") delete data.dni;
             if (editing && kind === "users") {
               delete data.email;
               if (!data.password) delete data.password;
@@ -272,13 +312,10 @@ function ProductCreateModal({
   const [brands, setBrands] = useState<CatalogItem[]>([]);
   const [categories, setCategories] = useState<CatalogItem[]>([]);
   useEffect(() => {
-    Promise.all([
-      api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"),
-      api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200"),
-    ])
+    Promise.all([listAll<CatalogItem>("/brands"), listAll<CatalogItem>("/product-categories")])
       .then(([brandRows, categoryRows]) => {
-        setBrands(asPaged(brandRows).items);
-        setCategories(asPaged(categoryRows).items);
+        setBrands(brandRows);
+        setCategories(categoryRows);
       })
       .catch(() => setError("No fue posible cargar marcas y categorías."));
   }, []);
@@ -390,13 +427,10 @@ function ProductEditModal({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    Promise.all([
-      api<Paged<CatalogItem> | CatalogItem[]>("/brands?page=1&page_size=200"),
-      api<Paged<CatalogItem> | CatalogItem[]>("/product-categories?page=1&page_size=200"),
-    ])
+    Promise.all([listAll<CatalogItem>("/brands"), listAll<CatalogItem>("/product-categories")])
       .then(([brandRows, categoryRows]) => {
-        setBrands(asPaged(brandRows).items);
-        setCategories(asPaged(categoryRows).items);
+        setBrands(brandRows);
+        setCategories(categoryRows);
       })
       .catch(() => setError("No fue posible cargar marcas y categorías."));
   }, []);
@@ -457,7 +491,14 @@ function ProductEditModal({
           </label>
           <label>
             Precio unitario
-            <input name="unit_price" type="number" min="0.01" step="0.01" required defaultValue={product.unit_price} />
+            <input
+              name="unit_price"
+              type="number"
+              min="0.01"
+              step="0.01"
+              required
+              defaultValue={product.unit_price}
+            />
           </label>
           <label>
             Activo
@@ -493,10 +534,8 @@ function CatalogModal({
   const [deleting, setDeleting] = useState<CatalogItem | null>(null);
   const [error, setError] = useState("");
   const load = () =>
-    api<Paged<CatalogItem> | CatalogItem[]>(
-      `/${endpoint}?include_inactive=true&page=1&page_size=200`,
-    )
-      .then((value) => setItems(asPaged(value).items))
+    listAll<CatalogItem>(`/${endpoint}?include_inactive=true`)
+      .then(setItems)
       .catch(() => setError(`No fue posible cargar ${title.toLowerCase()}.`));
   useEffect(() => {
     load();

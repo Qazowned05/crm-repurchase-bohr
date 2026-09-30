@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
@@ -68,9 +69,20 @@ def get_sale_or_404(sale_id: str, db: Session) -> Sale:
     return sale
 
 
-def assert_sale_access(sale: Sale, user: User) -> None:
-    if user.role == "ASESOR" and sale.advisor_id != user.id:
-        raise HTTPException(status_code=403, detail="You can only access your own sales")
+def assert_sale_access(sale: Sale, user: User, db: Session) -> None:
+    if user.role == "ASESOR":
+        customer = db.get(Customer, sale.customer_id)
+        if sale.advisor_id != user.id and (customer is None or customer.responsible_advisor_id != user.id):
+            raise HTTPException(status_code=403, detail="Sale is outside your portfolio")
+
+
+def sale_has_immutable_history(sale: Sale, db: Session) -> bool:
+    item_ids = select(SaleItem.id).where(SaleItem.sale_id == sale.id)
+    return (
+        sale.source_alert_id is not None
+        or db.scalar(select(Alert.id).where(Alert.sale_item_id.in_(item_ids)).limit(1)) is not None
+        or db.scalar(select(SaleItem.id).where(SaleItem.prior_confirmed_item_id.in_(item_ids)).limit(1)) is not None
+    )
 
 
 def confirmed_sale_exists(customer_id: str, db: Session) -> bool:
@@ -147,7 +159,6 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
         acquisition_channel=payload.acquisition_channel,
         acquisition_channel_detail=payload.acquisition_channel_detail.strip() if payload.acquisition_channel_detail else None,
         replaces_sale_id=payload.replaces_sale_id,
-        source_alert_id=payload.source_alert_id,
     )
     db.add(sale)
     db.flush()
@@ -160,18 +171,12 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
             expected_repurchase_date=payload.sale_date + timedelta(days=rule.duration_days),
         ))
     db.flush()
-    if payload.source_alert_id:
-        source_alert = db.get(Alert, payload.source_alert_id)
-        source_product_id = db.scalar(select(SaleItem.product_id).where(SaleItem.id == source_alert.sale_item_id)) if source_alert else None
-        source_customer_id = db.scalar(select(Sale.customer_id).join(SaleItem, SaleItem.sale_id == Sale.id).where(SaleItem.id == source_alert.sale_item_id)) if source_alert else None
-        if source_alert is None or source_alert.status in FINAL_STATUSES or source_customer_id != customer.id or source_product_id not in products:
-            raise HTTPException(status_code=422, detail="Source alert must be active and belong to the customer and a sold product")
     if sale.status == "CONFIRMADA":
         if first_confirmed_sale and customer.acquisition_channel is None:
             customer.acquisition_channel = sale.acquisition_channel
             customer.acquisition_channel_detail = sale.acquisition_channel_detail
         recompute_chain(customer.id, set(products), db)
-        close_alerts_for_repurchase(customer.id, set(products), sale.id, db, current_user.id, sale.source_alert_id)
+        close_alerts_for_repurchase(customer.id, set(products), sale.id, db, current_user.id)
     record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="REPLACEMENT_CONFIRMED" if payload.replaces_sale_id else ("CONFIRMED" if sale.status == "CONFIRMADA" else "DUPLICATE_DETECTED"), after={"status": sale.status, "customer_id": customer.id, "replaces_sale_id": payload.replaces_sale_id})
     db.commit()
     return sale_response(sale, db)
@@ -186,7 +191,12 @@ def list_sales(
 ) -> list[dict] | dict:
     query = select(Sale).order_by(Sale.sale_date.desc(), Sale.created_at.desc())
     if current_user.role == "ASESOR":
-        query = query.where(Sale.advisor_id == current_user.id)
+        # Alerts belong to the portfolio owner. Show that advisor the sales that
+        # generated their customers' alerts, even when another advisor registered them.
+        query = query.where(or_(
+            Sale.advisor_id == current_user.id,
+            Sale.customer_id.in_(select(Customer.id).where(Customer.responsible_advisor_id == current_user.id)),
+        ))
     if customer_id:
         query = query.where(Sale.customer_id == customer_id)
     if sale_date:
@@ -214,9 +224,13 @@ def advisor_sales_metrics(
     query = (
         select(
             func.count(func.distinct(Sale.id)),
+            func.count(func.distinct(case((SaleItem.purchase_type == "COMPRA", Sale.id)))),
             func.coalesce(func.sum(SaleItem.quantity), 0),
             func.count(func.distinct(case((SaleItem.purchase_type == "RECOMPRA", Sale.id)))),
             func.coalesce(func.sum(case((SaleItem.purchase_type == "RECOMPRA", SaleItem.quantity), else_=0)), 0),
+            func.coalesce(func.sum(SaleItem.unit_price * SaleItem.quantity), Decimal("0")),
+            func.coalesce(func.sum(case((SaleItem.purchase_type == "COMPRA", SaleItem.unit_price * SaleItem.quantity), else_=0)), Decimal("0")),
+            func.coalesce(func.sum(case((SaleItem.purchase_type == "RECOMPRA", SaleItem.unit_price * SaleItem.quantity), else_=0)), Decimal("0")),
         )
         .join(SaleItem, SaleItem.sale_id == Sale.id)
         .where(Sale.advisor_id == current_user.id, Sale.status == "CONFIRMADA")
@@ -234,19 +248,20 @@ def advisor_sales_metrics(
         query = query.where(Sale.customer_id.in_(customer_ids))
     if product_id:
         query = query.where(SaleItem.product_id == product_id)
-    confirmed_sales, confirmed_items, repurchase_sales, repurchase_items = db.execute(query).one()
+    confirmed_sales, regular_sales, confirmed_items, repurchase_sales, repurchase_items, total_revenue, regular_revenue, repurchase_revenue = db.execute(query).one()
     return {
-        "confirmed_sales": confirmed_sales,
+        "confirmed_sales": confirmed_sales, "regular_sales": regular_sales,
         "confirmed_items": confirmed_items,
         "repurchase_sales": repurchase_sales,
         "repurchase_items": repurchase_items,
+        "total_revenue": total_revenue, "regular_revenue": regular_revenue, "repurchase_revenue": repurchase_revenue,
     }
 
 
 @router.get("/{sale_id}", response_model=SaleResponse)
 def get_sale(sale_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     sale = get_sale_or_404(sale_id, db)
-    assert_sale_access(sale, current_user)
+    assert_sale_access(sale, current_user, db)
     return sale_response(sale, db)
 
 
@@ -259,6 +274,12 @@ def update_sale(
     old_customer_id = sale.customer_id
     old_product_ids = set(db.scalars(select(SaleItem.product_id).where(SaleItem.sale_id == sale.id)))
     before = sale_response(sale, db)
+
+    if {"sale_date", "items"}.intersection(changes) and sale_has_immutable_history(sale, db):
+        raise HTTPException(
+            status_code=409,
+            detail="Sale date and items cannot be changed after alerts or repurchase history exist; annul and register a replacement sale instead",
+        )
 
     if "customer_id" in changes:
         customer = db.get(Customer, changes["customer_id"])
@@ -287,7 +308,7 @@ def update_sale(
         remove_sale_items_and_alerts(sale.id, db)
         # Recreate the same items after clearing alerts tied to their previous due dates.
         for item in before["items"]:
-            values = {key: item[key] for key in ("id", "sale_id", "product_id", "quantity", "rule_duration_days", "rule_alert_days", "purchase_type", "prior_confirmed_item_id", "created_at")}
+            values = {key: item[key] for key in ("id", "sale_id", "product_id", "quantity", "unit_price", "rule_duration_days", "rule_alert_days", "purchase_type", "prior_confirmed_item_id", "created_at")}
             values["expected_repurchase_date"] = changes["sale_date"] + timedelta(days=item["rule_duration_days"])
             db.add(SaleItem(**values))
     for field, value in changes.items():

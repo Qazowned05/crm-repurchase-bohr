@@ -1,6 +1,7 @@
+import { useState } from "react";
 import type { Paged } from "../services/types";
 
-export const PAGE_SIZE = 25;
+export const PAGE_SIZE = 10;
 
 export function isPaged<T>(value: Paged<T> | T[]): value is Paged<T> {
   return !Array.isArray(value);
@@ -17,9 +18,20 @@ export function Pagination<T>({
   onPageChange,
 }: {
   data: Paged<T>;
-  onPageChange: (page: number) => void;
+  onPageChange: (page: number) => void | Promise<void>;
 }) {
+  const [loading, setLoading] = useState(false);
   if (data.pages <= 1) return null;
+
+  const changePage = async (page: number) => {
+    if (loading || page === data.page) return;
+    setLoading(true);
+    try {
+      await onPageChange(page);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const pages = new Set([1, data.pages]);
   for (
@@ -32,19 +44,23 @@ export function Pagination<T>({
   const visiblePages = [...pages].sort((left, right) => left - right);
 
   return (
-    <nav className="pagination" aria-label="Paginación">
+    <nav
+      className={`pagination${loading ? " is-loading" : ""}`}
+      aria-label="Paginación"
+      aria-busy={loading}
+    >
       <button
         className="pagination-arrow"
-        disabled={data.page === 1}
-        onClick={() => onPageChange(Math.max(1, data.page - 10))}
+        disabled={loading || data.page === 1}
+        onClick={() => changePage(Math.max(1, data.page - 10))}
         aria-label="Retroceder diez páginas"
       >
         &lt;&lt;
       </button>
       <button
         className="pagination-arrow"
-        disabled={data.page === 1}
-        onClick={() => onPageChange(data.page - 1)}
+        disabled={loading || data.page === 1}
+        onClick={() => changePage(data.page - 1)}
         aria-label="Página anterior"
       >
         &lt;
@@ -56,7 +72,8 @@ export function Pagination<T>({
           ) : null}
           <button
             className={page === data.page ? "pagination-page active" : "pagination-page"}
-            onClick={() => onPageChange(page)}
+            disabled={loading}
+            onClick={() => changePage(page)}
             aria-current={page === data.page ? "page" : undefined}
           >
             {page}
@@ -65,20 +82,25 @@ export function Pagination<T>({
       ))}
       <button
         className="pagination-arrow"
-        disabled={data.page >= data.pages}
-        onClick={() => onPageChange(data.page + 1)}
+        disabled={loading || data.page >= data.pages}
+        onClick={() => changePage(data.page + 1)}
         aria-label="Página siguiente"
       >
         &gt;
       </button>
       <button
         className="pagination-arrow"
-        disabled={data.page >= data.pages}
-        onClick={() => onPageChange(Math.min(data.pages, data.page + 10))}
+        disabled={loading || data.page >= data.pages}
+        onClick={() => changePage(Math.min(data.pages, data.page + 10))}
         aria-label="Avanzar diez páginas"
       >
         &gt;&gt;
       </button>
+      {loading && (
+        <span className="pagination-loading" role="status">
+          Cargando
+        </span>
+      )}
     </nav>
   );
 }
