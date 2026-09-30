@@ -16,3 +16,9 @@ frontend_reference/
 
 # Operational notes and planning documents stay local; BPMN models remain versioned.
 *.md
+!README.md
+!docs/ARCHITECTURE.md
+!docs/DEPLOYMENT.md
+!docs/OPERATIONS.md
+!docs/images_docs/
+!docs/images_docs/**
