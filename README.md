@@ -2,10 +2,6 @@
 
 CRM para gestionar el ciclo de recompra de BOHR Pharmaceutical. Centraliza ventas, alertas de recompra, gestión comercial, recuperación, reasignaciones, importación histórica y reportes operativos.
 
-<p align="center">
-  <img src="docs/images_docs/resumen_admin.png" alt="Resumen administrativo del CRM" width="860">
-</p>
-
 ## Capacidades
 
 - Registro de clientes con cartera responsable, UBIGEO y datos de contacto.
