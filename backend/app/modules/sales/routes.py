@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
-from app.core.pagination import paginate_items
+from app.core.pagination import paginated_scalars
 from app.dependencies import get_current_user, require_roles
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
@@ -123,6 +123,14 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
         raise HTTPException(status_code=422, detail="Customer must exist and be active")
     if current_user.role == "ASESOR" and customer.responsible_advisor_id != current_user.id:
         raise HTTPException(status_code=403, detail="Customer is outside your portfolio")
+    sale_advisor_id = current_user.id
+    if payload.advisor_id is not None:
+        if current_user.role == "ASESOR":
+            raise HTTPException(status_code=403, detail="Advisors cannot assign sales to another user")
+        sale_advisor = db.get(User, payload.advisor_id)
+        if sale_advisor is None or not sale_advisor.is_active or sale_advisor.role != "ASESOR":
+            raise HTTPException(status_code=422, detail="Sale advisor must be an active advisor")
+        sale_advisor_id = sale_advisor.id
     if payload.replaces_sale_id:
         if current_user.role not in {"SUPERVISOR", "ADMIN"}:
             raise HTTPException(status_code=403, detail="Only supervisors and administrators can register replacement sales")
@@ -153,7 +161,7 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
         ).limit(1)
     ) is not None
     sale = Sale(
-        customer_id=customer.id, advisor_id=current_user.id, sale_date=payload.sale_date,
+        customer_id=customer.id, advisor_id=sale_advisor_id, sale_date=payload.sale_date,
         notes=payload.notes.strip() if payload.notes else None,
         status="PENDIENTE_REVISION_DUPLICADO" if duplicate else "CONFIRMADA",
         acquisition_channel=payload.acquisition_channel,
@@ -177,7 +185,12 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
             customer.acquisition_channel_detail = sale.acquisition_channel_detail
         recompute_chain(customer.id, set(products), db)
         close_alerts_for_repurchase(customer.id, set(products), sale.id, db, current_user.id)
-    record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="REPLACEMENT_CONFIRMED" if payload.replaces_sale_id else ("CONFIRMED" if sale.status == "CONFIRMADA" else "DUPLICATE_DETECTED"), after={"status": sale.status, "customer_id": customer.id, "replaces_sale_id": payload.replaces_sale_id})
+    if payload.customer_condition is not None:
+        previous_condition = customer.condition
+        customer.condition = payload.customer_condition.strip() or None
+        if customer.condition != previous_condition:
+            record_audit(db, actor_id=current_user.id, entity_type="customer", entity_id=customer.id, action="UPDATED", before={"condition": previous_condition}, after={"condition": customer.condition, "source": "sale"})
+    record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="REPLACEMENT_CONFIRMED" if payload.replaces_sale_id else ("CONFIRMED" if sale.status == "CONFIRMADA" else "DUPLICATE_DETECTED"), after={"status": sale.status, "customer_id": customer.id, "advisor_id": sale.advisor_id, "replaces_sale_id": payload.replaces_sale_id})
     db.commit()
     return sale_response(sale, db)
 
@@ -185,7 +198,7 @@ def create_sale(payload: SaleCreate, current_user: User = Depends(require_roles(
 @router.get("")
 def list_sales(
     customer_id: str | None = None, sale_date: date | None = None, sale_status: str | None = Query(default=None, alias="status"),
-    q: str | None = None, product_id: str | None = None,
+    q: str | None = None, product_id: str | None = None, advisor_id: str | None = None,
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(require_roles("ASESOR", "SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
 ) -> list[dict] | dict:
@@ -212,7 +225,12 @@ def list_sales(
         query = query.where(Sale.customer_id.in_(customer_ids))
     if product_id:
         query = query.where(Sale.id.in_(select(SaleItem.sale_id).where(SaleItem.product_id == product_id)))
-    return paginate_items([sale_response(sale, db) for sale in db.scalars(query)], page, page_size)
+    if advisor_id and current_user.role != "ASESOR":
+        query = query.where(Sale.advisor_id == advisor_id)
+    result = paginated_scalars(db, query, page, page_size)
+    if isinstance(result, list):
+        return [sale_response(sale, db) for sale in result]
+    return {**result, "items": [sale_response(sale, db) for sale in result["items"]]}
 
 
 @router.get("/me/metrics", response_model=AdvisorSalesMetricsResponse)

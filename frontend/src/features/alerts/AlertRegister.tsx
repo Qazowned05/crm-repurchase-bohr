@@ -1,8 +1,16 @@
 import { useEffect, useState } from "react";
 import { Modal } from "../../components/Modal";
+import { SearchSelect } from "../../components/SearchSelect";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { api, listAll } from "../../services/api";
-import type { ContactAttempt, ManagedAlert, Paged, Product } from "../../services/types";
+import type {
+  ContactAttempt,
+  ManagedAlert,
+  Paged,
+  Product,
+  TypificationTree,
+  User,
+} from "../../services/types";
 
 const closedStatuses = new Set([
   "RECOMPRA_LOGRADA",
@@ -13,6 +21,8 @@ const closedStatuses = new Set([
   "NO_INTERESADO",
   "VENCIDO_NO_GESTIONADO",
 ]);
+type RepurchaseSelection = "ORIGINAL" | "OTHER" | "BOTH";
+type RepurchaseLine = { product_id: string; quantity: number };
 
 function formatDate(value?: string | null, withTime = false) {
   if (!value) return "Sin registro";
@@ -21,6 +31,10 @@ function formatDate(value?: string | null, withTime = false) {
     dateStyle: "medium",
     ...(withTime ? { timeStyle: "short" } : {}),
   }).format(date);
+}
+
+function daysOverdue(value: string) {
+  return Math.max(0, Math.floor((Date.now() - new Date(`${value}T00:00:00`).getTime()) / 86400000));
 }
 
 function statusLabel(status: string) {
@@ -84,6 +98,10 @@ function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => 
           <b>{alert.assigned_advisor_name || "Sin asignar"}</b>
           <small>{alert.assigned_advisor_email || ""}</small>
         </div>
+        <div>
+          <span>Enfermedad o condición</span>
+          <b>{alert.customer_condition || "Sin información"}</b>
+        </div>
       </div>
       {closed && (
         <p className="closure-reason">
@@ -130,6 +148,320 @@ function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => 
   );
 }
 
+function AlertManagement({
+  alert,
+  typifications,
+  products,
+  onClose,
+  onManaged,
+}: {
+  alert: ManagedAlert;
+  typifications: TypificationTree[];
+  products: Product[];
+  onClose: () => void;
+  onManaged: () => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"ATTEMPT" | "REPURCHASE">("ATTEMPT");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [repurchaseSelection, setRepurchaseSelection] = useState<RepurchaseSelection>("ORIGINAL");
+  const [originalQuantity, setOriginalQuantity] = useState(1);
+  const [extraLines, setExtraLines] = useState<RepurchaseLine[]>([]);
+  const options = typifications.flatMap((parent) => [
+    { id: parent.id, code: parent.code, label: parent.name },
+    ...parent.children.map((child) => ({
+      id: child.id,
+      code: child.code,
+      label: `${parent.name} / ${child.name}`,
+    })),
+  ]);
+  return (
+    <Modal title="Gestionar alerta" onClose={onClose}>
+      <div className="alert-summary">
+        <div>
+          <span>Cliente</span>
+          <b>{`${alert.customer_first_names || ""} ${alert.customer_last_names || ""}`.trim()}</b>
+          <small>{alert.customer_dni ? `DNI ${alert.customer_dni}` : ""}</small>
+        </div>
+        <div>
+          <span>Producto</span>
+          <b>{alert.product_name || "Sin producto"}</b>
+          <small>{alert.product_code || ""}</small>
+        </div>
+      </div>
+      <form
+        className="alert-management-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setError("");
+          setSaving(true);
+          const form = new FormData(event.currentTarget);
+          try {
+            if (mode === "REPURCHASE") {
+              if (!alert.product_id) throw new Error("La alerta no tiene un producto válido.");
+              const items = [
+                ...(repurchaseSelection === "ORIGINAL" || repurchaseSelection === "BOTH"
+                  ? [{ product_id: alert.product_id, quantity: originalQuantity }]
+                  : []),
+                ...(repurchaseSelection === "OTHER" || repurchaseSelection === "BOTH"
+                  ? extraLines
+                  : []),
+              ];
+              if (!items.length || items.some((item) => !item.product_id || item.quantity <= 0)) {
+                throw new Error("Completa producto y cantidad para cada producto confirmado.");
+              }
+              await api(`/alerts/${alert.id}/repurchase`, {
+                method: "POST",
+                body: JSON.stringify({
+                  sale_date: form.get("sale_date"),
+                  notes: form.get("notes") || undefined,
+                  customer_condition: form.get("customer_condition") || undefined,
+                  items,
+                }),
+              });
+            } else {
+              const option = options.find((item) => item.id === form.get("typification_id"));
+              if (!option) throw new Error("Selecciona una tipificación.");
+              await api(`/alerts/${alert.id}/attempts`, {
+                method: "POST",
+                body: JSON.stringify({
+                  channel: form.get("channel"),
+                  result: option.code,
+                  typification_id: option.id,
+                  note: form.get("note") || undefined,
+                  next_action_date: form.get("next_action_date") || undefined,
+                }),
+              });
+            }
+            await onManaged();
+            onClose();
+          } catch (reason) {
+            setError(
+              reason instanceof Error ? reason.message : "No fue posible registrar la gestión.",
+            );
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        <fieldset className="management-mode-switch">
+          <legend>Resultado de la gestión</legend>
+          <label className={mode === "ATTEMPT" ? "is-selected" : ""}>
+            <input type="radio" checked={mode === "ATTEMPT"} onChange={() => setMode("ATTEMPT")} />
+            Tipificar contacto
+          </label>
+          <label className={mode === "REPURCHASE" ? "is-selected" : ""}>
+            <input
+              type="radio"
+              checked={mode === "REPURCHASE"}
+              onChange={() => setMode("REPURCHASE")}
+            />
+            Recompra confirmada
+          </label>
+        </fieldset>
+        {mode === "ATTEMPT" ? (
+          <div className="form-grid">
+            <label>
+              Tipificación
+              <select name="typification_id" required defaultValue="">
+                <option value="" disabled>
+                  Selecciona una tipificación
+                </option>
+                {options.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Canal
+              <select name="channel" required defaultValue="LLAMADA">
+                <option value="LLAMADA">Llamada</option>
+                <option value="WHATSAPP">WhatsApp</option>
+                <option value="EMAIL">Correo</option>
+                <option value="OTRO">Otro</option>
+              </select>
+            </label>
+            <label>
+              Próxima acción
+              <input name="next_action_date" type="date" />
+            </label>
+            <label className="notes">
+              Nota
+              <textarea name="note" maxLength={4000} />
+            </label>
+          </div>
+        ) : (
+          <section className="repurchase-confirmation" aria-label="Detalle de la recompra">
+            <p className="repurchase-info-banner">
+              Registra la venta confirmada. Esta acción cerrará la alerta y no requiere
+              tipificación.
+            </p>
+            {repurchaseSelection === "OTHER" && (
+              <p className="repurchase-info-banner repurchase-recovery-note">
+                La alerta del producto original quedará en recuperación para seguimiento posterior.
+              </p>
+            )}
+            <fieldset className="repurchase-product-choice">
+              <legend>¿Qué compró?</legend>
+              <div>
+                {(
+                  [
+                    ["ORIGINAL", "Original"],
+                    ["OTHER", "Otro producto"],
+                    ["BOTH", "Ambos"],
+                  ] as Array<[RepurchaseSelection, string]>
+                ).map(([value, label]) => (
+                  <label key={value} className={repurchaseSelection === value ? "is-selected" : ""}>
+                    <input
+                      type="radio"
+                      name="repurchase-selection"
+                      value={value}
+                      checked={repurchaseSelection === value}
+                      onChange={() => setRepurchaseSelection(value)}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            {(repurchaseSelection === "ORIGINAL" || repurchaseSelection === "BOTH") && (
+              <section className="repurchase-original-line">
+                <div className="repurchase-line-product">
+                  <span>Producto original</span>
+                  <b>{alert.product_name || alert.product_code || "Sin información"}</b>
+                </div>
+                <label>
+                  Cantidad
+                  <input
+                    type="number"
+                    min="1"
+                    value={originalQuantity}
+                    onChange={(event) => setOriginalQuantity(Number(event.target.value))}
+                    required
+                  />
+                </label>
+              </section>
+            )}
+            {(repurchaseSelection === "OTHER" || repurchaseSelection === "BOTH") && (
+              <section className="repurchase-extra-products">
+                <div className="repurchase-section-heading">
+                  <h3>Otros productos</h3>
+                  <button
+                    type="button"
+                    className="secondary repurchase-add-product"
+                    onClick={() =>
+                      setExtraLines((lines) => [...lines, { product_id: "", quantity: 1 }])
+                    }
+                  >
+                    Agregar producto
+                  </button>
+                </div>
+                {extraLines.map((line, index) => (
+                  <div className="repurchase-extra-line" key={index}>
+                    <label>
+                      Producto
+                      <SearchSelect
+                        value={line.product_id}
+                        placeholder="Busca por nombre o código"
+                        required
+                        onChange={(product_id) =>
+                          setExtraLines((lines) =>
+                            lines.map((item, lineIndex) =>
+                              lineIndex === index ? { ...item, product_id } : item,
+                            ),
+                          )
+                        }
+                        options={products
+                          .filter(
+                            (product) =>
+                              product.id !== alert.product_id &&
+                              !extraLines.some(
+                                (item, lineIndex) =>
+                                  lineIndex !== index && item.product_id === product.id,
+                              ),
+                          )
+                          .map((product) => ({
+                            value: product.id,
+                            label: `${product.name} (${product.code})`,
+                          }))}
+                      />
+                    </label>
+                    <label>
+                      Cantidad
+                      <input
+                        type="number"
+                        min="1"
+                        value={line.quantity}
+                        onChange={(event) =>
+                          setExtraLines((lines) =>
+                            lines.map((item, lineIndex) =>
+                              lineIndex === index
+                                ? { ...item, quantity: Number(event.target.value) }
+                                : item,
+                            ),
+                          )
+                        }
+                        required
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary repurchase-remove-product"
+                      onClick={() =>
+                        setExtraLines((lines) =>
+                          lines.filter((_, lineIndex) => lineIndex !== index),
+                        )
+                      }
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+                {!extraLines.length && (
+                  <p className="repurchase-empty-lines">Agrega los productos confirmados.</p>
+                )}
+              </section>
+            )}
+            <div className="form-grid">
+              <label>
+                Fecha de recompra
+                <input
+                  name="sale_date"
+                  type="date"
+                  defaultValue={new Date().toISOString().slice(0, 10)}
+                  required
+                />
+              </label>
+              <label className="notes">
+                Enfermedad o condición del cliente
+                <textarea
+                  name="customer_condition"
+                  defaultValue={alert.customer_condition || ""}
+                  maxLength={500}
+                  placeholder="Actualiza solo si hubo cambios"
+                />
+              </label>
+              <label className="notes">
+                Nota
+                <textarea name="notes" maxLength={4000} />
+              </label>
+            </div>
+          </section>
+        )}
+        {error && <p className="form-error">{error}</p>}
+        <footer>
+          <button type="button" className="secondary" onClick={onClose} disabled={saving}>
+            Cancelar
+          </button>
+          <button disabled={saving}>{saving ? "Guardando..." : "Guardar gestión"}</button>
+        </footer>
+      </form>
+    </Modal>
+  );
+}
+
 export function AlertRegister() {
   const [data, setData] = useState<Paged<ManagedAlert>>({
     items: [],
@@ -139,7 +471,10 @@ export function AlertRegister() {
     pages: 0,
   });
   const [selected, setSelected] = useState<ManagedAlert | null>(null);
+  const [managing, setManaging] = useState<ManagedAlert | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  const [advisors, setAdvisors] = useState<User[]>([]);
+  const [typifications, setTypifications] = useState<TypificationTree[]>([]);
   const [filters, setFilters] = useState({
     date_from: "",
     date_to: "",
@@ -148,6 +483,7 @@ export function AlertRegister() {
     product_id: "",
     status: "",
     alert_type: "",
+    advisor_id: "",
   });
   const [error, setError] = useState("");
   const load = (page = data.page, active = filters) => {
@@ -161,6 +497,12 @@ export function AlertRegister() {
     load().catch(() => setError("No fue posible cargar el registro de alertas."));
     listAll<Product>("/products")
       .then(setProducts)
+      .catch(() => {});
+    api<User[]>("/users/advisors")
+      .then(setAdvisors)
+      .catch(() => {});
+    api<TypificationTree[]>("/configuration/contact-typifications/tree")
+      .then(setTypifications)
       .catch(() => {});
   }, []);
   return (
@@ -193,6 +535,7 @@ export function AlertRegister() {
                 product_id: "",
                 status: "",
                 alert_type: "",
+                advisor_id: "",
               };
               setFilters(reset);
               setError("");
@@ -244,6 +587,24 @@ export function AlertRegister() {
                 ))}
               </select>
             </label>
+            {advisors.length > 0 && (
+              <label>
+                Asesor
+                <select
+                  value={filters.advisor_id}
+                  onChange={(event) =>
+                    setFilters((value) => ({ ...value, advisor_id: event.target.value }))
+                  }
+                >
+                  <option value="">Todos los asesores</option>
+                  {advisors.map((advisor) => (
+                    <option key={advisor.id} value={advisor.id}>
+                      {advisor.full_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
               Desde
               <input
@@ -343,7 +704,28 @@ export function AlertRegister() {
                     const latest = latestAttempt(alert);
                     const closed = closedStatuses.has(alert.status);
                     return (
-                      <tr key={alert.id}>
+                      <tr
+                        key={alert.id}
+                        className={closed ? "" : "alert-table-row is-actionable"}
+                        role={closed ? undefined : "button"}
+                        tabIndex={closed ? undefined : 0}
+                        aria-label={
+                          closed
+                            ? undefined
+                            : `Gestionar alerta de ${alert.product_name || "producto"}`
+                        }
+                        onClick={closed ? undefined : () => setManaging(alert)}
+                        onKeyDown={
+                          closed
+                            ? undefined
+                            : (event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  setManaging(alert);
+                                }
+                              }
+                        }
+                      >
                         {index === 0 && (
                           <td rowSpan={customerAlerts.length} className="customer-cell">
                             <b>
@@ -369,6 +751,11 @@ export function AlertRegister() {
                           <span className="table-detail">
                             Alerta: {formatDate(alert.alert_date)}
                           </span>
+                          {!closed && daysOverdue(alert.alert_date) > 0 && (
+                            <span className="table-detail danger-text">
+                              Atención vencida: {daysOverdue(alert.alert_date)} días
+                            </span>
+                          )}
                         </td>
                         <td>
                           <span className={alertStatusClass(alert.status)}>
@@ -397,9 +784,17 @@ export function AlertRegister() {
                           )}
                         </td>
                         <td>
-                          <button className="secondary" onClick={() => setSelected(alert)}>
-                            Ver detalle
-                          </button>
+                          <div className="row-actions">
+                            <button
+                              className="link"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelected(alert);
+                              }}
+                            >
+                              Ver detalle
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -422,6 +817,15 @@ export function AlertRegister() {
         />
       </section>
       {selected && <AlertDetails alert={selected} onClose={() => setSelected(null)} />}
+      {managing && (
+        <AlertManagement
+          alert={managing}
+          typifications={typifications}
+          products={products}
+          onClose={() => setManaging(null)}
+          onManaged={() => load(data.page)}
+        />
+      )}
     </>
   );
 }

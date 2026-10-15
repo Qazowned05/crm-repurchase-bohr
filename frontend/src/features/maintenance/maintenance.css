@@ -9,6 +9,71 @@
   align-items: center;
   gap: 8px;
 }
+.maintenance-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #dce5ec;
+  padding-bottom: 18px;
+}
+.maintenance-filters label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #526b7d;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.maintenance-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+.maintenance-filter-actions button {
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.customer-detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #dce5ec;
+  padding-bottom: 16px;
+}
+.customer-detail-heading h3 {
+  margin: 3px 0 0;
+  color: #003b67;
+  font-size: 19px;
+}
+.customer-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 20px;
+  margin: 0;
+}
+.customer-details > div {
+  min-width: 0;
+}
+.customer-details dt {
+  color: #718596;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.customer-details dd {
+  margin: 4px 0 0;
+  color: #19364b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.customer-details .customer-details-wide {
+  grid-column: 1 / -1;
+}
 .modal-section-title {
   margin: 22px 0 14px;
   border-top: 1px solid #dce5ec;
@@ -85,6 +150,13 @@
   }
   .maintenance-actions .link + .link {
     margin-left: 2px;
+  }
+  .maintenance-filters,
+  .customer-details {
+    grid-template-columns: 1fr;
+  }
+  .maintenance-filter-actions {
+    justify-content: flex-start;
   }
   .catalog-list > div,
   .rule-card header,

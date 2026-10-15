@@ -35,6 +35,11 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
+@router.get("/advisors", response_model=list[UserResponse])
+def list_active_advisors(_: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[User]:
+    return list(db.scalars(select(User).where(User.role == "ASESOR", User.is_active.is_(True)).order_by(User.full_name)))
+
+
 @router.get("", response_model=None)
 def list_users(
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200), _: User = Depends(require_roles("ADMIN")), db: Session = Depends(get_db)

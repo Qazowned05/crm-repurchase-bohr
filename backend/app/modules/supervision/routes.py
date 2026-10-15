@@ -1,7 +1,8 @@
 from datetime import date, timedelta
+from math import ceil
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -119,6 +120,7 @@ def recovery_queue(
     max_days_since_sale: int | None = Query(default=None, ge=0),
     q: str | None = None,
     product_id: str | None = None,
+    last_advisor_id: str | None = None,
     alert_status: str | None = Query(default=None, alias="status"),
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=200),
@@ -133,6 +135,10 @@ def recovery_queue(
         select(AlertContactAttempt.result).where(AlertContactAttempt.alert_id == Alert.id)
         .order_by(AlertContactAttempt.contacted_at.desc(), AlertContactAttempt.id.desc()).limit(1).correlate(Alert).scalar_subquery()
     )
+    latest_advisor = (
+        select(AlertContactAttempt.advisor_id).where(AlertContactAttempt.alert_id == Alert.id)
+        .order_by(AlertContactAttempt.contacted_at.desc(), AlertContactAttempt.id.desc()).limit(1).correlate(Alert).scalar_subquery()
+    )
     query = (
         recovery_alerts_query(db)
         .join(SaleItem, SaleItem.id == Alert.sale_item_id)
@@ -140,7 +146,7 @@ def recovery_queue(
         .join(Customer, Customer.id == Sale.customer_id)
         .join(Product, Product.id == SaleItem.product_id)
         .with_only_columns(Alert, Sale, SaleItem, Customer, Product)
-        .order_by(Customer.last_names, Customer.first_names, Alert.alert_date)
+        .order_by(Alert.alert_date.desc(), Customer.last_names, Customer.first_names)
     )
     if typification_id is not None:
         query = query.where(latest_result.in_(typification_descendant_codes(typification_id, db)))
@@ -161,8 +167,29 @@ def recovery_queue(
         ))
     if product_id:
         query = query.where(Product.id == product_id)
+    if last_advisor_id:
+        query = query.where(or_(
+            latest_advisor == last_advisor_id,
+            and_(latest_advisor.is_(None), Sale.advisor_id == last_advisor_id),
+        ))
     if alert_status:
         query = query.where(Alert.status == alert_status)
+    paged_customers: dict | None = None
+    if page is not None or page_size is not None:
+        current_page, size = page or 1, page_size or 50
+        latest_alert_date = func.max(Alert.alert_date).label("latest_alert_date")
+        customer_query = (
+            query.order_by(None)
+            .with_only_columns(Customer.id, latest_alert_date)
+            .group_by(Customer.id)
+            .order_by(desc(latest_alert_date), Customer.id)
+        )
+        total = db.scalar(select(func.count()).select_from(customer_query.order_by(None).subquery())) or 0
+        customer_ids = [row[0] for row in db.execute(customer_query.limit(size).offset((current_page - 1) * size))]
+        if not customer_ids:
+            return {"items": [], "page": current_page, "page_size": size, "total": total, "pages": ceil(total / size) if total else 0}
+        query = query.where(Customer.id.in_(customer_ids))
+        paged_customers = {"page": current_page, "page_size": size, "total": total, "pages": ceil(total / size) if total else 0}
     rows = db.execute(query).all()
     alert_ids = [alert.id for alert, *_ in rows]
     latest_attempts: dict[str, AlertContactAttempt] = {}
@@ -188,7 +215,12 @@ def recovery_queue(
             "sale_id": sale.id, "sale_date": sale.sale_date, "product_id": product.id,
             "product_code": product.code, "product_name": product.name,
         })
-    return paginate_items(list(grouped.values()), page, page_size)
+    items = list(grouped.values())
+    if paged_customers is None:
+        return items
+    order = {customer_id: index for index, customer_id in enumerate(customer_ids)}
+    items.sort(key=lambda customer: order[customer["customer_id"]])
+    return {**paged_customers, "items": items}
 
 
 @router.post("/alerts/{alert_id}/assign", response_model=AlertResponse)

@@ -1,0 +1,5 @@
+    quiero resumir unicamente a lo que yo tengo esperiencia, que es cloud sql, IAM,  compute engine, bigquery, y cloud run, pero necesito tmb algunos fundamentos de cloud compose
+    ademas, necesito ejemplos de como aplicarlo, como crear los recursos,y  en que situacione se usaria, ademas necesito
+    que me digas tambien como funciona terraform, para agilizar la configuracion de infraestructura como codigo
+
+    y por ultimo necesito que me des ejemplso reales y los comandos , para crear cada recurso, la configuracion, como ahorrar costes, y eso,

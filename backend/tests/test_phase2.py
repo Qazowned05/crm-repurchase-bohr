@@ -90,6 +90,27 @@ def test_supervisor_customer_assignment_makes_customer_visible_to_advisor(client
     assert [customer["id"] for customer in visible.json()] == [created.json()["id"]]
 
 
+def test_customer_and_product_lists_filter_records(client: TestClient, db: Session) -> None:
+    supervisor = user(db, "filters@example.com", "SUPERVISOR")
+    advisor = user(db, "filters-advisor@example.com", "ASESOR")
+    auth = headers(client, supervisor.email)
+    client.post(
+        "/api/v1/customers",
+        headers=auth,
+        json={"dni": "20100070970", "customer_type": "EMPRESA", "business_name": "Bohr SAC", "phone": "999111222", "responsible_advisor_id": advisor.id},
+    )
+    assert client.get(f"/api/v1/customers?document=970&phone=111&advisor_id={advisor.id}&customer_type=EMPRESA", headers=auth).json()[0]["business_name"] == "Bohr SAC"
+    customers_export = client.get("/api/v1/customers/export.xlsx?document=970", headers=auth)
+    assert customers_export.status_code == 200
+    assert customers_export.content.startswith(b"PK")
+    brand, category = catalog(client, auth)
+    client.post("/api/v1/products", headers=auth, json={"code": "FILT-001", "name": "Producto filtrable", "brand_id": brand["id"], "category_id": category["id"]})
+    assert client.get(f"/api/v1/products?include_inactive=true&q=FILT&brand_id={brand['id']}&category_id={category['id']}&is_active=true", headers=auth).json()[0]["code"] == "FILT-001"
+    products_export = client.get("/api/v1/products/export.xlsx?q=FILT", headers=auth)
+    assert products_export.status_code == 200
+    assert products_export.content.startswith(b"PK")
+
+
 def test_active_customer_is_available_for_sales_without_changing_portfolio(client: TestClient, db: Session) -> None:
     supervisor = user(db, "supervisor-sales-options@example.com", "SUPERVISOR")
     owner = user(db, "owner-sales-options@example.com", "ASESOR")

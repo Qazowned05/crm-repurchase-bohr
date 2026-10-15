@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _generation_lock = Lock()
 _scheduler_stop = Event()
 _scheduler_thread: Thread | None = None
+_last_generation_marker: tuple[date, datetime | None] | None = None
 
 
 def active_alerts_query():
@@ -52,6 +53,7 @@ def alert_response(alert: Alert, db: Session) -> dict:
         "customer_id": customer.id if customer else None, "customer_dni": customer.dni if customer else None,
         "customer_first_names": customer.first_names if customer else None, "customer_last_names": customer.last_names if customer else None,
         "customer_phone": customer.phone if customer else None, "customer_email": customer.email if customer else None,
+        "customer_condition": customer.condition if customer else None,
         "product_id": product.id if product else None, "product_code": product.code if product else None,
         "product_name": product.name if product else None, "original_sale_id": sale.id if sale else None,
         "original_sale_date": sale.sale_date if sale else None, "seller_advisor_id": advisor.id if advisor else None,
@@ -150,29 +152,41 @@ def assigned_advisor(customer: Customer, sale: Sale, db: Session) -> str | None:
 
 def generate_daily_alerts(run_date: date, db: Session) -> dict[str, int]:
     """Generate one due-date alert per confirmed sale item, including missed cycles."""
-    created = pending = expired = 0
     config = alert_settings(db)
     rows = db.execute(
         select(SaleItem, Sale, Customer).join(Sale, Sale.id == SaleItem.sale_id).join(Customer, Customer.id == Sale.customer_id)
         .where(Sale.status == "CONFIRMADA")
     ).all()
-    for item, sale, customer in rows:
-        if item.expected_repurchase_date > run_date:
-            continue
-        if db.scalar(select(Alert.id).where(Alert.sale_item_id == item.id)) is not None:
+    due_rows = [(item, sale, customer) for item, sale, customer in rows if item.expected_repurchase_date <= run_date]
+    due_item_ids = [item.id for item, _, _ in due_rows]
+    existing_item_ids: set[str] = set()
+    for start in range(0, len(due_item_ids), 1000):
+        existing_item_ids.update(db.scalars(select(Alert.sale_item_id).where(Alert.sale_item_id.in_(due_item_ids[start:start + 1000]))))
+    advisor_ids = {
+        advisor_id
+        for _, sale, customer in due_rows
+        for advisor_id in (customer.responsible_advisor_id, sale.advisor_id)
+        if advisor_id is not None
+    }
+    active_advisor_ids = set(db.scalars(select(User.id).where(User.id.in_(advisor_ids), User.is_active.is_(True))))
+    alerts: list[Alert] = []
+    for item, sale, customer in due_rows:
+        if item.id in existing_item_ids:
             continue
         within_window = item.expected_repurchase_date >= run_date - timedelta(days=config.advisor_visibility_days)
         alert_status = "PENDIENTE" if within_window else "VENCIDO_NO_GESTIONADO"
-        alert = Alert(sale_item_id=item.id, assigned_advisor_id=assigned_advisor(customer, sale, db),
-                      alert_date=item.expected_repurchase_date, expected_repurchase_date=item.expected_repurchase_date,
-                      status=alert_status, closed_at=None if alert_status == "PENDIENTE" else datetime.now(timezone.utc))
-        db.add(alert)
-        db.flush()
-        record_audit(db, actor_id=None, entity_type="alert", entity_id=alert.id, action="GENERATED", after={"status": alert_status, "sale_item_id": item.id, "generation_actor": "SYSTEM"})
-        created += 1
-        pending += alert_status == "PENDIENTE"
-        expired += alert_status == "VENCIDO_NO_GESTIONADO"
-    return {"created": created, "pending": pending, "expired": expired}
+        assigned_advisor_id = customer.responsible_advisor_id if customer.responsible_advisor_id in active_advisor_ids else sale.advisor_id if sale.advisor_id in active_advisor_ids else None
+        alerts.append(Alert(sale_item_id=item.id, assigned_advisor_id=assigned_advisor_id,
+                       alert_date=item.expected_repurchase_date, expected_repurchase_date=item.expected_repurchase_date,
+                      status=alert_status, closed_at=None if alert_status == "PENDIENTE" else datetime.now(timezone.utc)))
+    db.add_all(alerts)
+    db.flush()
+    pending = expired = 0
+    for alert in alerts:
+        record_audit(db, actor_id=None, entity_type="alert", entity_id=alert.id, action="GENERATED", after={"status": alert.status, "sale_item_id": alert.sale_item_id, "generation_actor": "SYSTEM"})
+        pending += alert.status == "PENDIENTE"
+        expired += alert.status == "VENCIDO_NO_GESTIONADO"
+    return {"created": len(alerts), "pending": pending, "expired": expired}
 
 
 def run_alert_generation(run_date: date, db: Session, *, commit: bool = True) -> dict[str, int]:
@@ -189,10 +203,26 @@ def run_alert_generation(run_date: date, db: Session, *, commit: bool = True) ->
             raise
 
 
+def ensure_daily_alerts(db: Session) -> None:
+    """Generate only when the day changes or confirmed sales have changed."""
+    global _last_generation_marker
+    today = date.today()
+    latest_sale_item = db.scalar(
+        select(func.max(SaleItem.created_at))
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .where(Sale.status == "CONFIRMADA")
+    )
+    marker = (today, latest_sale_item)
+    if marker == _last_generation_marker:
+        return
+    run_alert_generation(today, db)
+    _last_generation_marker = marker
+
+
 def _run_scheduled_generation() -> None:
     db = SessionLocal()
     try:
-        run_alert_generation(date.today(), db)
+        ensure_daily_alerts(db)
     except Exception:
         logger.exception("Automatic alert generation failed")
     finally:

@@ -39,6 +39,7 @@ def workbook(headers: list[str], rows: list[list[object]], formula: bool = False
 
 
 CUSTOMER_HEADERS = ["dni", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"]
+BUSINESS_CUSTOMER_HEADERS = ["customer_type", "dni", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"]
 PRODUCT_HEADERS = ["code", "name", "brand", "category", "unit_price", "is_active", "duration_days", "alert_days", "effective_from"]
 HISTORICAL_SALES_HEADERS = ["numero_venta", "customer_dni", "sale_date", "advisor_email", "channel", "channel_detail", "product_code", "quantity", "notes", "historical_unit_price"]
 
@@ -89,7 +90,7 @@ def test_clean_import_commits_customers_and_versioned_product_rule(client: TestC
     assert db.query(Customer).count() == 1
     assert client.post("/api/v1/brands", headers=headers, json={"name": "Bohr"}).status_code == 201
     assert client.post("/api/v1/product-categories", headers=headers, json={"name": "Suplementos"}).status_code == 201
-    product_job = preview(client, headers, "products", workbook(PRODUCT_HEADERS, [["COL-001", "Colageno", "Bohr", "Suplementos", "19.90", "true", "30", "15,5", "2026-01-01"]]))
+    product_job = preview(client, headers, "products", workbook(PRODUCT_HEADERS, [["COL-001", "Colageno", "Bohr", "Suplementos", "19.90", "true", "30", "15,5", "01/01/2026"]]))
     assert client.post(f"/api/v1/imports/{product_job['id']}/commit", headers=headers).status_code == 200
     assert db.query(Product).count() == 1
     assert db.query(ProductRepurchaseRule).count() == 1
@@ -100,6 +101,26 @@ def test_product_import_rejects_unknown_catalog_values(client: TestClient, db: S
     result = preview(client, auth(client, supervisor.email), "products", workbook(PRODUCT_HEADERS, [["COL-404", "Colageno", "Desconocida", "Suplementos", "19.90", "true", "", "", ""]]))
     assert result["state"] == "PREVIEW_ERRORS"
     assert "existing active catalog" in result["errors"][0]["message"]
+
+
+def test_business_customer_import_uses_ruc_and_business_name(client: TestClient, db: Session) -> None:
+    supervisor = make_user(db, "business-import@example.com", "SUPERVISOR")
+    job = preview(
+        client,
+        auth(client, supervisor.email),
+        "customers",
+        workbook(
+            BUSINESS_CUSTOMER_HEADERS,
+            [["EMPRESA", "20100070970", "Bohr Pharmaceutical SAC", "", "", "999999999", "", "", "", "", "", "", ""]],
+        ),
+    )
+    assert job["state"] == "PREVIEW_READY"
+    assert client.post(f"/api/v1/imports/{job['id']}/commit", headers=auth(client, supervisor.email)).status_code == 200
+    customer = db.query(Customer).one()
+    assert customer.customer_type == "EMPRESA"
+    assert customer.business_name == "Bohr Pharmaceutical SAC"
+    assert customer.first_names == "Bohr Pharmaceutical SAC"
+    assert customer.last_names == ""
 
 
 def test_historical_sales_import_groups_lines_and_preserves_price(client: TestClient, db: Session) -> None:

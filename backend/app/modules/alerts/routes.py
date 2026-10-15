@@ -1,17 +1,17 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import and_, case, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
-from app.core.pagination import paginate_items
+from app.core.pagination import paginated_scalars, paginate_items
 from app.dependencies import get_current_user
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.alerts.schemas import AlertRepurchaseCreate, AlertResponse, ContactAttemptCreate, ContactAttemptResponse, ManagedAlertResponse
-from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, alert_response, contact_attempt_response, managed_alert_response, run_alert_generation
+from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, alert_response, contact_attempt_response, ensure_daily_alerts, managed_alert_response
 from app.modules.alerts.service import advisor_visible_alerts_query
 from app.modules.auth.models import User
 from app.modules.configuration.models import ContactTypification
@@ -143,13 +143,30 @@ def register_repurchase(
     product_ids = set(products)
     recompute_chain(customer.id, product_ids, db)
     source_product_purchased = source_item.product_id in product_ids
+    if payload.customer_condition is not None:
+        previous_condition = customer.condition
+        customer.condition = payload.customer_condition.strip() or None
+        if customer.condition != previous_condition:
+            record_audit(db, actor_id=current_user.id, entity_type="customer", entity_id=customer.id, action="UPDATED", before={"condition": previous_condition}, after={"condition": customer.condition, "source": "repurchase"})
     alert.status = "RECOMPRA_LOGRADA" if source_product_purchased else "COMPRA_OTRO_PRODUCTO"
-    alert.closed_at = datetime.now(timezone.utc)
+    managed_at = datetime.now(timezone.utc)
+    alert.closed_at = managed_at
+    alert.last_contact_at = managed_at
+    alert.attempts_count += 1
     alert.closure_reason = (
         f"RECOMPRA_CONFIRMADA: venta {sale.id}"
         if source_product_purchased
         else f"COMPRA_OTRO_PRODUCTO: venta {sale.id}"
     )
+    # A confirmed repurchase is a commercial management and must remain visible in the alert history.
+    db.add(AlertContactAttempt(
+        alert_id=alert.id,
+        advisor_id=current_user.id,
+        contacted_at=managed_at,
+        channel="SISTEMA",
+        result="RECOMPRA_REGISTRADA" if source_product_purchased else "COMPRA_OTRO_PRODUCTO",
+        note=payload.notes.strip() if payload.notes else "Recompra confirmada desde la alerta.",
+    ))
     record_audit(db, actor_id=current_user.id, entity_type="alert", entity_id=alert.id, action="REPURCHASE_ACHIEVED" if source_product_purchased else "OTHER_PRODUCT_PURCHASED", after={"status": alert.status, "closure_reason": alert.closure_reason, "repurchase_sale_id": sale.id})
     record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="CONFIRMED", after={"status": sale.status, "customer_id": customer.id, "source_alert_id": alert.id})
     db.commit()
@@ -165,20 +182,24 @@ def inbox(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
 ) -> list[dict] | dict:
     today = date.today()
-    # Catch up after a restart or a system date change before reading the inbox.
-    run_alert_generation(today, db)
-    priority = case(
-        (Alert.status == "REPROGRAMADO", 4),
-        (Alert.next_action_date < today, 0),
-        (Alert.alert_date < today, 1),
-        (Alert.next_action_date == today, 2),
-        else_=3,
-    )
-    query = (advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()).order_by(priority, Alert.next_action_date, Alert.alert_date)
+    ensure_daily_alerts(db)
+    query = advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
+        due_date = func.coalesce(Alert.next_action_date, Alert.alert_date)
+        priority = case(
+            (due_date == today, 0),
+            (due_date < today, 1),
+            else_=2,
+        )
+        query = query.order_by(priority, due_date.desc(), Alert.created_at.desc())
+    else:
+        query = query.order_by(Alert.alert_date.desc(), Alert.created_at.desc())
     query = apply_priority_filter(apply_alert_filters(query, q, product_id, alert_status, alert_type), priority_filter, today)
-    return paginate_items([alert_response(alert, db) for alert in db.scalars(query)], page, page_size)
+    result = paginated_scalars(db, query, page, page_size)
+    if isinstance(result, list):
+        return [managed_alert_response(alert, db) for alert in result]
+    return {**result, "items": [managed_alert_response(alert, db) for alert in result["items"]]}
 
 
 @router.get("/inbox-summary")
@@ -207,6 +228,7 @@ def managed_register(
     date_to: date | None = None,
     state: str | None = Query(default=None, pattern="^(open-follow-up|closed)$"),
     q: str | None = None, product_id: str | None = None, alert_status: str | None = Query(default=None, alias="status"),
+    advisor_id: str | None = None,
     alert_type: str | None = Query(default=None, pattern="^(AUTOMATICA|REASIGNADA|SEGUIMIENTO)$"),
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(get_current_user),
@@ -218,6 +240,8 @@ def managed_register(
     query = select(Alert)
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
+    elif advisor_id:
+        query = query.where(Alert.assigned_advisor_id == advisor_id)
     if date_from:
         query = query.where(Alert.alert_date >= date_from)
     if date_to:
@@ -227,8 +251,45 @@ def managed_register(
     elif state == "closed":
         query = query.where(Alert.status.in_(FINAL_STATUSES))
     query = apply_alert_filters(query, q, product_id, alert_status, alert_type)
-    rows = [managed_alert_response(alert, db) for alert in db.scalars(query.order_by(Alert.alert_date.desc(), Alert.created_at.desc()))]
-    return paginate_items(rows, page, page_size)
+    result = paginated_scalars(db, query.order_by(Alert.alert_date.desc(), Alert.created_at.desc()), page, page_size)
+    if isinstance(result, list):
+        return [managed_alert_response(alert, db) for alert in result]
+    return {**result, "items": [managed_alert_response(alert, db) for alert in result["items"]]}
+
+
+@router.get("/upcoming")
+def upcoming_alerts(
+    limit: int = Query(default=12, ge=1, le=50),
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+) -> list[dict]:
+    """Return planned reminders without making them actionable before their date."""
+    if current_user.role != "ASESOR":
+        raise HTTPException(status_code=403, detail="Upcoming alerts are available to advisors only")
+    today = date.today()
+    rows = db.execute(
+        select(SaleItem, Sale, Customer, Product)
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .join(Customer, Customer.id == Sale.customer_id)
+        .join(Product, Product.id == SaleItem.product_id)
+        .where(
+            Sale.status == "CONFIRMADA",
+            or_(Sale.advisor_id == current_user.id, Customer.responsible_advisor_id == current_user.id),
+        )
+    ).all()
+    upcoming: list[dict] = []
+    for item, sale, customer, product in rows:
+        scheduled = sorted({item.expected_repurchase_date - timedelta(days=days) for days in item.rule_alert_days})
+        for alert_date in scheduled:
+            if alert_date <= today:
+                continue
+            upcoming.append({
+                "sale_item_id": item.id, "alert_date": alert_date,
+                "expected_repurchase_date": item.expected_repurchase_date,
+                "alert_kind": "VENCIMIENTO" if alert_date == scheduled[-1] else "SEGUIMIENTO",
+                "customer_name": f"{customer.first_names} {customer.last_names}".strip(),
+                "customer_dni": customer.dni, "product_name": product.name, "product_code": product.code,
+            })
+    return sorted(upcoming, key=lambda alert: (alert["alert_date"], alert["customer_name"]))[:limit]
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)

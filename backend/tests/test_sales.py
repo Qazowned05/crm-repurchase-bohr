@@ -7,6 +7,7 @@ from app.core.security import hash_password
 from app.modules.audit.models import AuditLog
 from app.modules.auth.models import User
 from app.modules.alerts.models import Alert, AlertContactAttempt
+from app.modules.customers.models import Customer
 from app.modules.sales.models import Sale, SaleDuplicateReview, SaleItem
 
 
@@ -97,6 +98,23 @@ def test_advisor_sees_sales_for_own_portfolio(client: TestClient, db: Session) -
     assert [row["id"] for row in portfolio_sales] == [sale.json()["id"]]
     assert portfolio_sales[0]["advisor_full_name"] != advisor.full_name
     assert client.get(f"/api/v1/sales/{sale.json()['id']}", headers=headers(client, advisor.email)).status_code == 200
+
+
+def test_supervisor_assigns_sale_to_advisor_without_transferring_portfolio(client: TestClient, db: Session) -> None:
+    portfolio_advisor, customer, product, supervisor_auth = customer_and_product(client, db)
+    sale_advisor = user(db, "sale-advisor@example.com", "ASESOR")
+
+    response = client.post("/api/v1/sales", headers=supervisor_auth, json={
+        "customer_id": customer["id"], "advisor_id": sale_advisor.id, "sale_date": "2026-01-10",
+        "acquisition_channel": "TV", "items": [{"product_id": product["id"], "quantity": 1}],
+    })
+
+    assert response.status_code == 201
+    assert response.json()["advisor_id"] == sale_advisor.id
+    assert db.get(Sale, response.json()["id"]).advisor_id == sale_advisor.id
+    assert db.get(Customer, customer["id"]).responsible_advisor_id == portfolio_advisor.id
+    filtered = client.get(f"/api/v1/sales?advisor_id={sale_advisor.id}", headers=supervisor_auth)
+    assert [sale["id"] for sale in filtered.json()] == [response.json()["id"]]
 
 
 def test_advisor_personal_metrics_only_include_confirmed_sales(client: TestClient, db: Session) -> None:

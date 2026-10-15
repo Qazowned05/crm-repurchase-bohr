@@ -1,4 +1,9 @@
+from io import BytesIO
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -36,6 +41,28 @@ def validate_location(payload: CustomerCreate | CustomerSupervisorUpdate, custom
         if value != location[expected]:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The selected location is inconsistent")
     return location
+
+
+def customer_query(current_user: User, q: str | None, document: str | None, phone: str | None, advisor_id: str | None, customer_type: str | None):
+    query = select(Customer).order_by(Customer.last_names, Customer.first_names)
+    if current_user.role == "ASESOR":
+        query = query.where(Customer.responsible_advisor_id == current_user.id)
+    elif advisor_id:
+        query = query.where(Customer.responsible_advisor_id == advisor_id)
+    if q:
+        term = f"%{q.strip()}%"
+        query = query.where(or_(Customer.first_names.ilike(term), Customer.last_names.ilike(term), Customer.business_name.ilike(term)))
+    if document:
+        query = query.where(Customer.dni.ilike(f"%{document.strip()}%"))
+    if phone:
+        query = query.where(Customer.phone.ilike(f"%{phone.strip()}%"))
+    if customer_type:
+        query = query.where(Customer.customer_type == customer_type)
+    return query
+
+
+def excel_text(value: object) -> object:
+    return f"'{value}" if isinstance(value, str) and value.startswith(("=", "+", "-", "@")) else value
 
 
 @router.get("/locations")
@@ -114,16 +141,15 @@ def transfer_customer_assignment(customer: Customer, advisor_id: str | None, rea
 @router.get("", response_model=None)
 def list_customers(
     q: str | None = Query(default=None, max_length=120),
+    document: str | None = Query(default=None, max_length=20),
+    phone: str | None = Query(default=None, max_length=30),
+    advisor_id: str | None = None,
+    customer_type: str | None = Query(default=None, pattern="^(PERSONA|EMPRESA)$"),
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[Customer] | dict:
-    query = select(Customer).order_by(Customer.last_names, Customer.first_names)
-    if current_user.role == "ASESOR":
-        query = query.where(Customer.responsible_advisor_id == current_user.id)
-    if q:
-        term = f"%{q.strip()}%"
-        query = query.where(or_(Customer.dni.ilike(term), Customer.first_names.ilike(term), Customer.last_names.ilike(term)))
+    query = customer_query(current_user, q, document, phone, advisor_id, customer_type)
     return paginate_items(list(db.scalars(query)), page, page_size)
 
 
@@ -136,6 +162,48 @@ def list_sale_options(
     if current_user.role == "ASESOR":
         query = query.where(Customer.responsible_advisor_id == current_user.id)
     return list(db.scalars(query.order_by(Customer.last_names, Customer.first_names)))
+
+
+@router.get("/export.xlsx")
+def export_customers(
+    q: str | None = Query(default=None, max_length=120),
+    document: str | None = Query(default=None, max_length=20),
+    phone: str | None = Query(default=None, max_length=30),
+    advisor_id: str | None = None,
+    customer_type: str | None = Query(default=None, pattern="^(PERSONA|EMPRESA)$"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    advisors = {user.id: user.full_name for user in db.scalars(select(User))}
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Clientes"
+    headers = ["Tipo", "Documento", "Número de documento", "Cliente", "Teléfono", "Correo", "Asesor asignado", "Estado", "Condición", "Fecha de nacimiento", "Departamento", "Provincia", "Distrito"]
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for customer in db.scalars(customer_query(current_user, q, document, phone, advisor_id, customer_type)):
+        sheet.append([
+            "Empresa" if customer.customer_type == "EMPRESA" else "Persona",
+            "RUC" if customer.customer_type == "EMPRESA" else "DNI",
+            excel_text(customer.dni),
+            excel_text(customer.business_name or f"{customer.first_names} {customer.last_names}".strip()),
+            excel_text(customer.phone),
+            excel_text(customer.email or ""),
+            excel_text(advisors.get(customer.responsible_advisor_id or "", "")),
+            customer.status,
+            excel_text(customer.condition or ""),
+            customer.birth_date,
+            excel_text(customer.department or ""),
+            excel_text(customer.province or ""),
+            excel_text(customer.district or ""),
+        ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="clientes.xlsx"'})
 
 
 @router.get("/{customer_id}", response_model=CustomerResponse)
@@ -166,8 +234,10 @@ def create_customer(
     validate_responsible(responsible_id, db)
     customer = Customer(
         dni=payload.dni,
-        first_names=payload.first_names.strip(),
-        last_names=payload.last_names.strip(),
+        customer_type=payload.customer_type,
+        business_name=payload.business_name,
+        first_names=payload.first_names or "",
+        last_names=payload.last_names or "",
         phone=payload.phone.strip(),
         email=str(payload.email).lower() if payload.email else None,
         responsible_advisor_id=responsible_id,
@@ -186,7 +256,7 @@ def create_customer(
         entity_type="customer",
         entity_id=customer.id,
         action="CREATED",
-        after={"dni": customer.dni, "responsible_advisor_id": customer.responsible_advisor_id},
+        after={"dni": customer.dni, "customer_type": customer.customer_type, "responsible_advisor_id": customer.responsible_advisor_id},
     )
     db.commit()
     db.refresh(customer)
@@ -211,6 +281,25 @@ def update_customer(
     has_assignment_change = "responsible_advisor_id" in payload.model_fields_set
     if has_assignment_change:
         validate_responsible(advisor_id, db)
+    customer_type = changes.get("customer_type", customer.customer_type)
+    business_name = changes.get("business_name", customer.business_name)
+    if customer_type == "EMPRESA":
+        if not customer.dni.isdigit() or len(customer.dni) != 11:
+            raise HTTPException(status_code=422, detail="RUC must contain exactly 11 digits")
+        if not business_name or len(business_name.strip()) < 2:
+            raise HTTPException(status_code=422, detail="business_name is required for an EMPRESA customer")
+        changes["business_name"] = business_name.strip()
+        changes["first_names"] = business_name.strip()
+        changes["last_names"] = ""
+        changes["birth_date"] = None
+    else:
+        first_names = changes.get("first_names", customer.first_names)
+        last_names = changes.get("last_names", customer.last_names)
+        if len(first_names.strip()) < 2 or len(last_names.strip()) < 2:
+            raise HTTPException(status_code=422, detail="first_names and last_names are required for a PERSONA customer")
+        changes["first_names"] = first_names.strip()
+        changes["last_names"] = last_names.strip()
+        changes["business_name"] = None
     before = {field: getattr(customer, field) for field in changes}
     for field, value in changes.items():
         if field == "email" and value is not None:

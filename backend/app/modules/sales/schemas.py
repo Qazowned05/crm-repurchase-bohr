@@ -12,10 +12,12 @@ class SaleItemCreate(BaseModel):
 
 class SaleCreate(BaseModel):
     customer_id: str
+    advisor_id: str | None = None
     sale_date: date
     notes: str | None = Field(default=None, max_length=4000)
     acquisition_channel: Literal["TV", "DIGITAL", "OTROS"] | None = None
     acquisition_channel_detail: str | None = Field(default=None, max_length=255)
+    customer_condition: str | None = Field(default=None, max_length=500)
     replaces_sale_id: str | None = None
     source_alert_id: str | None = None
     items: list[SaleItemCreate] = Field(min_length=1, max_length=100)

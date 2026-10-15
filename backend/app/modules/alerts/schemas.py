@@ -23,6 +23,7 @@ class AlertRepurchaseCreate(BaseModel):
     notes: str | None = Field(default=None, max_length=4000)
     acquisition_channel: Literal["TV", "DIGITAL", "OTROS"] | None = None
     acquisition_channel_detail: str | None = Field(default=None, max_length=255)
+    customer_condition: str | None = Field(default=None, max_length=500)
     items: list[RepurchaseItemCreate] = Field(min_length=1, max_length=100)
 
     @model_validator(mode="after")
@@ -56,6 +57,7 @@ class AlertResponse(BaseModel):
     customer_last_names: str | None = None
     customer_phone: str | None = None
     customer_email: str | None = None
+    customer_condition: str | None = None
     product_id: str | None = None
     product_code: str | None = None
     product_name: str | None = None

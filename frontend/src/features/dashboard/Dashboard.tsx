@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -16,16 +16,19 @@ import {
 import { api, listAll } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { Modal } from "../../components/Modal";
+import { SearchSelect } from "../../components/SearchSelect";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import type {
   Alert,
   AlertRepurchaseCreate,
   AdvisorSalesMetrics,
   Metrics,
+  ManagedAlert,
   Paged,
   Product,
   RepurchaseItem,
   TypificationTree,
+  UpcomingAlert,
   User,
 } from "../../services/types";
 
@@ -35,6 +38,18 @@ type AlertSummary = { total: number; unmanaged: number; due_today: number; overd
 
 function alertStatusClass(status: string) {
   return `status alert-status-${status.toLowerCase().replaceAll("_", "-")}`;
+}
+
+function formatAlertDate(value?: string | null, withTime = false) {
+  if (!value) return "Sin registro";
+  return new Intl.DateTimeFormat("es-PE", {
+    dateStyle: "medium",
+    ...(withTime ? { timeStyle: "short" } : {}),
+  }).format(new Date(withTime ? value : `${value}T00:00:00`));
+}
+
+function latestAlertAttempt(alert: ManagedAlert) {
+  return alert.contact_attempts[alert.contact_attempts.length - 1];
 }
 
 function formatCurrency(value: string | number) {
@@ -50,9 +65,29 @@ function daysSince(date?: string | null) {
   return Math.max(0, Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000));
 }
 
-export function Dashboard({ user }: { user: User }) {
+function daysOverdue(date?: string | null) {
+  return date
+    ? Math.max(0, Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000))
+    : 0;
+}
+
+function advisorInitials(name: string) {
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function advisorAvatarTone(name: string) {
+  return name.charCodeAt(0) % 5;
+}
+
+export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
   const currentMonthStart = `${new Date().toISOString().slice(0, 8)}01`;
-  const [alertPage, setAlertPage] = useState<Paged<Alert>>({
+  const [alertPage, setAlertPage] = useState<Paged<ManagedAlert>>({
     items: [],
     page: 1,
     page_size: PAGE_SIZE,
@@ -60,7 +95,15 @@ export function Dashboard({ user }: { user: User }) {
     pages: 0,
   });
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [metricsPeriod, setMetricsPeriod] = useState(() => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const lastDay = new Date(year, today.getMonth() + 1, 0).getDate();
+    return { start_date: `${year}-${month}-01`, end_date: `${year}-${month}-${lastDay}` };
+  });
   const [advisorMetrics, setAdvisorMetrics] = useState<AdvisorSalesMetrics | null>(null);
+  const [upcomingAlerts, setUpcomingAlerts] = useState<UpcomingAlert[]>([]);
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [typifications, setTypifications] = useState<TypificationTree[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -83,12 +126,14 @@ export function Dashboard({ user }: { user: User }) {
     overdue: 0,
   });
   const [alertFilters, setAlertFilters] = useState({ q: "", status: "", priority: "" });
+  const loadMetrics = (period = metricsPeriod) => {
+    const query = new URLSearchParams(period);
+    return api<Metrics>(`/reports/metrics?${query}`).then(setMetrics);
+  };
   useEffect(() => {
     loadAlerts(1).catch(() => setAlertError("No es posible mostrar las alertas en este momento."));
     if (user.role !== "ASESOR") {
-      api<Metrics>("/reports/metrics")
-        .then(setMetrics)
-        .catch(() => {});
+      loadMetrics().catch(() => {});
     }
     if (user.role === "ASESOR") {
       api<AdvisorSalesMetrics>(`/sales/me/metrics?date_from=${currentMonthStart}`)
@@ -100,10 +145,13 @@ export function Dashboard({ user }: { user: User }) {
       listAll<Product>("/products")
         .then((value) => setProducts(value.filter((product) => product.is_active)))
         .catch(() => {});
+      api<UpcomingAlert[]>("/alerts/upcoming")
+        .then(setUpcomingAlerts)
+        .catch(() => {});
     }
   }, [user.role]);
   const alerts = alertPage.items;
-  const alertsByCustomer = new Map<string, Alert[]>();
+  const alertsByCustomer = new Map<string, ManagedAlert[]>();
   alerts.forEach((alert) => {
     const customerKey = alert.customer_id || alert.customer_dni || alert.id;
     alertsByCustomer.set(customerKey, [...(alertsByCustomer.get(customerKey) || []), alert]);
@@ -111,7 +159,7 @@ export function Dashboard({ user }: { user: User }) {
   const loadAlerts = (page = 1, active = alertFilters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
-    return api<Paged<Alert> | Alert[]>(`/alerts/inbox?${query}`).then((alerts) => {
+    return api<Paged<ManagedAlert> | ManagedAlert[]>(`/alerts/inbox?${query}`).then((alerts) => {
       setAlertPage(asPaged(alerts, page));
       return api<AlertSummary>(`/alerts/inbox-summary?${query}`)
         .then(setAlertSummary)
@@ -170,7 +218,10 @@ export function Dashboard({ user }: { user: User }) {
           setManagementError("Un producto solo puede incluirse una vez en la recompra.");
           return;
         }
-        const payload: AlertRepurchaseCreate = { items };
+        const payload: AlertRepurchaseCreate = {
+          items,
+          customer_condition: String(form.get("customer_condition") || "") || undefined,
+        };
         await api(`/alerts/${selectedAlert.id}/repurchase`, {
           method: "POST",
           body: JSON.stringify(payload),
@@ -199,10 +250,7 @@ export function Dashboard({ user }: { user: User }) {
         api<AdvisorSalesMetrics>(`/sales/me/metrics?date_from=${currentMonthStart}`)
           .then(setAdvisorMetrics)
           .catch(() => {});
-      else
-        api<Metrics>("/reports/metrics")
-          .then(setMetrics)
-          .catch(() => {});
+      else loadMetrics().catch(() => {});
     } catch (reason) {
       setManagementError(
         reason instanceof Error ? reason.message : "No fue posible registrar la gestión.",
@@ -216,7 +264,40 @@ export function Dashboard({ user }: { user: User }) {
           <p className="eyebrow">{user.role === "ASESOR" ? "MI JORNADA" : "SUPERVISION"}</p>
           <h1>Hola, {user.full_name.split(" ")[0]}</h1>
         </div>
-        <p>{new Intl.DateTimeFormat("es-PE", { dateStyle: "full" }).format(new Date())}</p>
+        <div className="dashboard-date-controls">
+          <p>{new Intl.DateTimeFormat("es-PE", { dateStyle: "full" }).format(new Date())}</p>
+          {user.role !== "ASESOR" && (
+            <form
+              className="dashboard-period"
+              onSubmit={(event) => {
+                event.preventDefault();
+                loadMetrics().catch(() => {});
+              }}
+            >
+              <label>
+                Desde
+                <input
+                  type="date"
+                  value={metricsPeriod.start_date}
+                  onChange={(event) =>
+                    setMetricsPeriod((period) => ({ ...period, start_date: event.target.value }))
+                  }
+                />
+              </label>
+              <label>
+                Hasta
+                <input
+                  type="date"
+                  value={metricsPeriod.end_date}
+                  onChange={(event) =>
+                    setMetricsPeriod((period) => ({ ...period, end_date: event.target.value }))
+                  }
+                />
+              </label>
+              <button type="submit">Aplicar</button>
+            </form>
+          )}
+        </div>
       </div>
       {managementSuccess && <p className="success-message">{managementSuccess}</p>}
       {user.role !== "ASESOR" && (
@@ -320,35 +401,40 @@ export function Dashboard({ user }: { user: User }) {
           <article className="panel advisors">
             <h2>Ranking de asesores</h2>
             {metrics?.advisor_ranking.length ? (
-              <ol className="advisor-ranking">
-                {metrics.advisor_ranking.slice(0, 5).map((advisor, index) => (
-                  <li key={advisor.advisor_id}>
-                    <span className="ranking-position">{index + 1}</span>
-                    <span className="avatar">{advisor.advisor_name[0]}</span>
-                    <span className="ranking-advisor">
-                      <b>{advisor.advisor_name}</b>
-                      <small>
-                        {advisor.confirmed_repurchases} recompras · {advisor.managed_alerts} alertas
-                        gestionadas
-                      </small>
-                    </span>
-                    <span className="ranking-revenue">
-                      <span>
-                        <small>Regular</small>
+              <>
+                <div className="ranking-table-header" aria-hidden="true">
+                  <span className="ranking-revenue-head">
+                    <span>Regular</span>
+                    <span>Recompra</span>
+                    <span>Total</span>
+                  </span>
+                </div>
+                <ol className="advisor-ranking">
+                  {metrics.advisor_ranking.slice(0, 5).map((advisor, index) => (
+                    <li key={advisor.advisor_id}>
+                      <span className="ranking-position">{index + 1}</span>
+                      <span
+                        className={`profile-initials advisor-avatar advisor-avatar-${advisorAvatarTone(advisor.advisor_name)}`}
+                        aria-hidden="true"
+                      >
+                        {advisorInitials(advisor.advisor_name)}
+                      </span>
+                      <span className="ranking-advisor">
+                        <b>{advisor.advisor_name}</b>
+                        <small>
+                          {advisor.confirmed_repurchases} recompras · {advisor.managed_alerts}{" "}
+                          alertas gestionadas
+                        </small>
+                      </span>
+                      <span className="ranking-revenue">
                         <b>{formatCurrency(advisor.regular_revenue)}</b>
-                      </span>
-                      <span>
-                        <small>Recompra</small>
                         <b>{formatCurrency(advisor.repurchase_revenue)}</b>
-                      </span>
-                      <span>
-                        <small>Total</small>
                         <b>{formatCurrency(advisor.total_revenue)}</b>
                       </span>
-                    </span>
-                  </li>
-                ))}
-              </ol>
+                    </li>
+                  ))}
+                </ol>
+              </>
             ) : (
               <p>No hay actividad de asesores en el periodo.</p>
             )}
@@ -471,56 +557,172 @@ export function Dashboard({ user }: { user: User }) {
                 Limpiar
               </button>
             </form>
-            <div className="alert-list">
-              {Array.from(alertsByCustomer.values()).map((customerAlerts) => {
-                const customer = customerAlerts[0];
-                return (
-                  <section
-                    className="alert-customer-group"
-                    key={customer.customer_id || customer.id}
-                  >
-                    <header>
-                      <span>
-                        <b>
-                          {customer.customer_first_names} {customer.customer_last_names}
-                        </b>
-                        <small>{customer.customer_dni ? `DNI ${customer.customer_dni}` : ""}</small>
-                      </span>
-                      <small>
-                        {customerAlerts.length} {customerAlerts.length === 1 ? "alerta" : "alertas"}
-                      </small>
-                    </header>
-                    {customerAlerts.map((alert) => (
-                      <button className="alert-row" key={alert.id} onClick={() => openAlert(alert)}>
-                        <span>
-                          <b>{alert.product_name || alert.product_code || "Producto"}</b>
-                          <small>Vence {alert.expected_repurchase_date}</small>
-                          <small>
-                            {alert.alert_type === "AUTOMATICA" || !alert.alert_type
-                              ? "Generada por vencimiento de compra"
-                              : alert.alert_type.replaceAll("_", " ")}
-                            {alert.assignment_reason ? ` · ${alert.assignment_reason}` : ""}
-                            {alert.next_action_date
-                              ? ` · Próxima acción: ${alert.next_action_date}`
-                              : ""}
-                          </small>
-                        </span>
-                        <span className={alertStatusClass(alert.status)}>
-                          {alert.status.replaceAll("_", " ")}
-                        </span>
-                        <span>Gestionar</span>
-                      </button>
-                    ))}
-                  </section>
-                );
-              })}
-              {!alerts.length && <p>No hay alertas activas.</p>}
+            <div className="table-wrap">
+              <table className="alert-register-table">
+                <thead>
+                  <tr>
+                    <th>Cliente</th>
+                    <th>Producto</th>
+                    <th>Asesor</th>
+                    <th>Vencimiento</th>
+                    <th>Estado</th>
+                    <th>Última gestión</th>
+                  </tr>
+                </thead>
+                {Array.from(alertsByCustomer.values()).map((customerAlerts) => {
+                  const customer = customerAlerts[0];
+                  return (
+                    <tbody
+                      className="alert-register-customer"
+                      key={customer.customer_id || customer.id}
+                    >
+                      {customerAlerts.map((alert, index) => {
+                        const latest = latestAlertAttempt(alert);
+                        return (
+                          <tr
+                            key={alert.id}
+                            className="alert-table-row is-actionable"
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Gestionar alerta de ${alert.product_name || "producto"}`}
+                            onClick={() => openAlert(alert)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                openAlert(alert);
+                              }
+                            }}
+                          >
+                            {index === 0 && (
+                              <td rowSpan={customerAlerts.length} className="customer-cell">
+                                <b>
+                                  {`${customer.customer_first_names || ""} ${customer.customer_last_names || ""}`.trim() ||
+                                    "Sin cliente"}
+                                </b>
+                                <span className="table-detail">
+                                  {customer.customer_dni ? `DNI ${customer.customer_dni}` : ""}
+                                </span>
+                                <span className="table-detail">
+                                  {customerAlerts.length}{" "}
+                                  {customerAlerts.length === 1 ? "alerta" : "alertas"}
+                                </span>
+                              </td>
+                            )}
+                            <td>
+                              <b>{alert.product_name || "Sin producto"}</b>
+                              <span className="table-detail">{alert.product_code || ""}</span>
+                            </td>
+                            <td>{alert.assigned_advisor_name || "Sin asignar"}</td>
+                            <td>
+                              {formatAlertDate(alert.expected_repurchase_date)}
+                              <span className="table-detail">
+                                Alerta: {formatAlertDate(alert.alert_date)}
+                              </span>
+                              {daysOverdue(alert.alert_date) > 0 && (
+                                <span className="table-detail danger-text">
+                                  Atención vencida: {daysOverdue(alert.alert_date)} días
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span className={alertStatusClass(alert.status)}>
+                                {alert.status.replaceAll("_", " ")}
+                              </span>
+                              <span className="table-detail">
+                                {alert.next_action_date
+                                  ? `Próxima: ${formatAlertDate(alert.next_action_date)}`
+                                  : "Sin próxima acción"}
+                              </span>
+                            </td>
+                            <td>
+                              {latest ? (
+                                <>
+                                  <b>
+                                    {latest.child_typification_name ||
+                                      latest.parent_typification_name ||
+                                      latest.result}
+                                  </b>
+                                  <span className="table-detail">
+                                    {formatAlertDate(latest.contacted_at, true)}
+                                  </span>
+                                </>
+                              ) : (
+                                "Sin gestión"
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  );
+                })}
+                {!alerts.length && (
+                  <tbody>
+                    <tr>
+                      <td colSpan={6}>No hay alertas activas.</td>
+                    </tr>
+                  </tbody>
+                )}
+              </table>
               {alertError && <p className="form-error">{alertError}</p>}
             </div>
             <Pagination
               data={alertPage}
               onPageChange={(page) => loadAlerts(page).catch(() => {})}
             />
+          </section>
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Próximas alertas</h2>
+                <p>Recordatorios informativos; se habilitan para gestión en su fecha.</p>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Cliente</th>
+                    <th>Producto</th>
+                    <th>Tipo</th>
+                    <th>Vencimiento</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upcomingAlerts.map((alert) => (
+                    <tr key={`${alert.sale_item_id}-${alert.alert_date}`}>
+                      <td>{alert.alert_date}</td>
+                      <td>
+                        {alert.customer_name}
+                        <span className="table-detail">{alert.customer_dni || ""}</span>
+                      </td>
+                      <td>
+                        {alert.product_name}
+                        <span className="table-detail">{alert.product_code}</span>
+                      </td>
+                      <td>
+                        <span
+                          className={
+                            alert.alert_kind === "VENCIMIENTO"
+                              ? "status alert-status-pendiente"
+                              : "status alert-status-reprogramado"
+                          }
+                        >
+                          {alert.alert_kind === "VENCIMIENTO" ? "Vencimiento" : "Seguimiento"}
+                        </span>
+                      </td>
+                      <td>{alert.expected_repurchase_date}</td>
+                    </tr>
+                  ))}
+                  {!upcomingAlerts.length && (
+                    <tr>
+                      <td colSpan={5}>No hay próximas alertas configuradas.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </section>
         </>
       ) : (
@@ -686,6 +888,9 @@ export function Dashboard({ user }: { user: User }) {
               <b>Fecha prevista:</b> {selectedAlert.expected_repurchase_date}
             </p>
             <p>
+              <b>Enfermedad o condición:</b> {selectedAlert.customer_condition || "Sin información"}
+            </p>
+            <p>
               <b>Tipo de alerta:</b>{" "}
               {selectedAlert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
             </p>
@@ -834,36 +1039,31 @@ export function Dashboard({ user }: { user: User }) {
                       <div className="repurchase-extra-line" key={index}>
                         <label>
                           Producto
-                          <select
+                          <SearchSelect
                             value={line.product_id}
-                            onChange={(event) =>
+                            placeholder="Busca por nombre o código"
+                            required
+                            onChange={(product_id) =>
                               setExtraRepurchaseLines((lines) =>
                                 lines.map((item, lineIndex) =>
-                                  lineIndex === index
-                                    ? { ...item, product_id: event.target.value }
-                                    : item,
+                                  lineIndex === index ? { ...item, product_id } : item,
                                 ),
                               )
                             }
-                            required
-                          >
-                            <option value="">Selecciona un producto</option>
-                            {products.map((product) => (
-                              <option
-                                key={product.id}
-                                value={product.id}
-                                disabled={
-                                  product.id === selectedAlert.product_id ||
-                                  extraRepurchaseLines.some(
+                            options={products
+                              .filter(
+                                (product) =>
+                                  product.id !== selectedAlert.product_id &&
+                                  !extraRepurchaseLines.some(
                                     (item, lineIndex) =>
                                       lineIndex !== index && item.product_id === product.id,
-                                  )
-                                }
-                              >
-                                {product.name} ({product.code})
-                              </option>
-                            ))}
-                          </select>
+                                  ),
+                              )
+                              .map((product) => ({
+                                value: product.id,
+                                label: `${product.name} (${product.code})`,
+                              }))}
+                          />
                         </label>
                         <label>
                           Cantidad
@@ -902,6 +1102,15 @@ export function Dashboard({ user }: { user: User }) {
                     )}
                   </section>
                 )}
+                <label className="notes">
+                  Enfermedad o condición del cliente
+                  <textarea
+                    name="customer_condition"
+                    defaultValue={selectedAlert.customer_condition || ""}
+                    maxLength={500}
+                    placeholder="Actualiza solo si hubo cambios"
+                  />
+                </label>
               </section>
             ) : (
               <>
@@ -1005,4 +1214,4 @@ export function Dashboard({ user }: { user: User }) {
       )}
     </>
   );
-}
+});

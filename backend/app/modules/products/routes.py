@@ -1,5 +1,10 @@
+from io import BytesIO
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -34,20 +39,76 @@ def product_response(product: Product) -> dict:
     return {"id": product.id, "code": product.code, "name": product.name, "brand_id": product.brand_id,
             "category_id": product.category_id, "brand_name": product.brand.name,
              "category_name": product.category.name, "unit_price": product.unit_price, "is_active": product.is_active,
-            "created_at": product.created_at, "updated_at": product.updated_at}
+             "created_at": product.created_at, "updated_at": product.updated_at}
+
+
+def excel_text(value: object) -> object:
+    return f"'{value}" if isinstance(value, str) and value.startswith(("=", "+", "-", "@")) else value
+
+
+def product_query(include_inactive: bool, q: str | None, brand_id: str | None, category_id: str | None, is_active: bool | None):
+    query = select(Product).options(selectinload(Product.brand), selectinload(Product.category)).order_by(Product.name)
+    if is_active is not None:
+        query = query.where(Product.is_active.is_(is_active))
+    elif not include_inactive:
+        query = query.where(Product.is_active.is_(True))
+    if q:
+        term = f"%{q.strip()}%"
+        query = query.where(or_(Product.name.ilike(term), Product.code.ilike(term)))
+    if brand_id:
+        query = query.where(Product.brand_id == brand_id)
+    if category_id:
+        query = query.where(Product.category_id == category_id)
+    return query
 
 
 @router.get("", response_model=None)
 def list_products(
     include_inactive: bool = False,
+    q: str | None = Query(default=None, max_length=120),
+    brand_id: str | None = None,
+    category_id: str | None = None,
+    is_active: bool | None = None,
     page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
     _: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[dict] | dict:
-    query = select(Product).options(selectinload(Product.brand), selectinload(Product.category)).order_by(Product.name)
-    if not include_inactive:
-        query = query.where(Product.is_active.is_(True))
+    query = product_query(include_inactive, q, brand_id, category_id, is_active)
     return paginate_items([product_response(product) for product in db.scalars(query)], page, page_size)
+
+
+@router.get("/export.xlsx")
+def export_products(
+    include_inactive: bool = False,
+    q: str | None = Query(default=None, max_length=120),
+    brand_id: str | None = None,
+    category_id: str | None = None,
+    is_active: bool | None = None,
+    _: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Productos"
+    headers = ["Código", "Producto", "Marca", "Categoría", "Precio unitario", "Estado"]
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for product in db.scalars(product_query(include_inactive, q, brand_id, category_id, is_active)):
+        sheet.append([
+            excel_text(product.code),
+            excel_text(product.name),
+            excel_text(product.brand.name),
+            excel_text(product.category.name),
+            product.unit_price,
+            "Activo" if product.is_active else "Inactivo",
+        ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="productos.xlsx"'})
 
 
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)

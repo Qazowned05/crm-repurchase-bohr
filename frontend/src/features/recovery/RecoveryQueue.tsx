@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
+import { SearchSelect } from "../../components/SearchSelect";
 import { api, listAll } from "../../services/api";
 import type {
   Paged,
@@ -49,23 +50,26 @@ export function RecoveryQueue() {
     max_days_since_sale: "",
     q: "",
     product_id: "",
+    last_advisor_id: "",
     status: "",
   });
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const load = (page = data.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
-    return api<Paged<RecoveryCustomer> | RecoveryCustomer[]>(
-      `/supervision/recovery-queue?${query}`,
-    ).then((value) => {
-      setData(asPaged(value, page));
-      setSelectedIds(new Set());
-    });
+    setLoading(true);
+    return api<Paged<RecoveryCustomer> | RecoveryCustomer[]>(`/supervision/recovery-queue?${query}`)
+      .then((value) => {
+        setData(asPaged(value, page));
+        setSelectedIds(new Set());
+      })
+      .finally(() => setLoading(false));
   };
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar la cola de recuperación."));
-    listAll<User>("/users")
-      .then((value) => setAdvisors(value.filter((u) => u.role === "ASESOR" && u.is_active)))
+    api<User[]>("/users/advisors")
+      .then(setAdvisors)
       .catch(() => {});
     api<TypificationTree[]>("/configuration/contact-typifications/tree")
       .then(setTree)
@@ -122,6 +126,7 @@ export function RecoveryQueue() {
                 max_days_since_sale: "",
                 q: "",
                 product_id: "",
+                last_advisor_id: "",
                 status: "",
               };
               setFilters(reset);
@@ -153,16 +158,31 @@ export function RecoveryQueue() {
             </label>
             <label>
               Producto
-              <select
+              <SearchSelect
                 value={filters.product_id}
+                placeholder="Todos los productos"
+                onChange={(product_id) => setFilters((value) => ({ ...value, product_id }))}
+                options={[
+                  { value: "", label: "Todos los productos" },
+                  ...products.map((product) => ({
+                    value: product.id,
+                    label: `${product.name} (${product.code})`,
+                  })),
+                ]}
+              />
+            </label>
+            <label>
+              Último asesor
+              <select
+                value={filters.last_advisor_id}
                 onChange={(event) =>
-                  setFilters((value) => ({ ...value, product_id: event.target.value }))
+                  setFilters((value) => ({ ...value, last_advisor_id: event.target.value }))
                 }
               >
-                <option value="">Todos los productos</option>
-                {products.map((product) => (
-                  <option key={product.id} value={product.id}>
-                    {product.name} ({product.code})
+                <option value="">Todos los asesores</option>
+                {advisors.map((advisor) => (
+                  <option key={advisor.id} value={advisor.id}>
+                    {advisor.full_name}
                   </option>
                 ))}
               </select>
@@ -270,6 +290,7 @@ export function RecoveryQueue() {
           </div>
         </div>
         <div className="table-wrap">
+          {loading && <p className="table-loading">Actualizando cola de recuperación...</p>}
           <table>
             <thead>
               <tr>
@@ -334,9 +355,14 @@ export function RecoveryQueue() {
                   </td>
                 </tr>
               ))}
-              {!rows.length && (
+              {!rows.length && !loading && (
                 <tr>
                   <td colSpan={9}>No hay alertas que coincidan con los filtros seleccionados.</td>
+                </tr>
+              )}
+              {!rows.length && loading && (
+                <tr>
+                  <td colSpan={9}>Cargando alertas de recuperación...</td>
                 </tr>
               )}
             </tbody>

@@ -10,6 +10,8 @@ export type User = { id: string; email: string; full_name: string; role: Role; i
 export type Customer = {
   id: string;
   dni: string;
+  customer_type: "PERSONA" | "EMPRESA";
+  business_name?: string | null;
   first_names: string;
   last_names: string;
   phone: string;
@@ -54,6 +56,7 @@ export type AlertRepurchaseCreate = {
   notes?: string;
   acquisition_channel?: "TV" | "DIGITAL" | "OTROS";
   acquisition_channel_detail?: string;
+  customer_condition?: string;
   items: RepurchaseItem[];
 };
 export type ProductRepurchaseRule = {
@@ -81,6 +84,7 @@ export type Alert = {
   customer_last_names?: string | null;
   customer_phone?: string | null;
   customer_email?: string | null;
+  customer_condition?: string | null;
   product_id?: string | null;
   product_code?: string | null;
   product_name?: string | null;
@@ -94,6 +98,16 @@ export type Alert = {
   alert_type?: "AUTOMATICA" | "REASIGNADA" | "SEGUIMIENTO" | null;
   assignment_reason?: string | null;
   assigned_at?: string | null;
+};
+export type UpcomingAlert = {
+  sale_item_id: string;
+  alert_date: string;
+  expected_repurchase_date: string;
+  alert_kind: "SEGUIMIENTO" | "VENCIMIENTO";
+  customer_name: string;
+  customer_dni?: string | null;
+  product_name: string;
+  product_code: string;
 };
 export type ContactAttempt = {
   id: string;

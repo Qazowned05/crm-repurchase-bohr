@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CustomerModal } from "../../components/CustomerModal";
 import { ConfirmModal, Modal } from "../../components/Modal";
+import { SearchSelect } from "../../components/SearchSelect";
 import { api, listAll } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
@@ -15,9 +16,114 @@ import type {
 
 type SaleLine = { product_id: string; quantity: number };
 
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("es-PE", { dateStyle: "medium" }).format(
+    new Date(`${value}T00:00:00`),
+  );
+}
+
+function formatCurrency(value?: string | null) {
+  if (value == null) return "No registrado";
+  return new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" }).format(
+    Number(value),
+  );
+}
+
+function saleStatusClass(status: string) {
+  if (status === "CONFIRMADA") return "status success";
+  if (status === "PENDIENTE_REVISION_DUPLICADO") return "status warning";
+  return "status neutral";
+}
+
+function SaleDetails({ sale, onClose }: { sale: Sale; onClose: () => void }) {
+  const customerName =
+    `${sale.customer_last_names || ""} ${sale.customer_first_names || ""}`.trim();
+  const customerContact = [
+    sale.customer_dni && `DNI ${sale.customer_dni}`,
+    sale.customer_phone,
+    sale.customer_email,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const channel = [sale.acquisition_channel, sale.acquisition_channel_detail]
+    .filter(Boolean)
+    .join(" · ");
+  const total = sale.items.every((item) => item.unit_price != null)
+    ? sale.items.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0)
+    : null;
+  return (
+    <Modal title="Detalle de venta" onClose={onClose}>
+      <div className="alert-summary sale-summary">
+        <div>
+          <span>Cliente</span>
+          <b>{customerName || "Sin cliente"}</b>
+          <small>{customerContact}</small>
+        </div>
+        <div>
+          <span>Fecha de venta</span>
+          <b>{formatDate(sale.sale_date)}</b>
+          <small>{channel || "Canal no registrado"}</small>
+        </div>
+        <div>
+          <span>Registrada por</span>
+          <b>{sale.advisor_full_name || "Usuario no disponible"}</b>
+          <small>{sale.advisor_email || ""}</small>
+        </div>
+        <div>
+          <span>Estado</span>
+          <b className={sale.status === "CONFIRMADA" ? "success-text" : "pending-text"}>
+            {sale.status.replaceAll("_", " ")}
+          </b>
+        </div>
+        <div>
+          <span>Total de venta</span>
+          <b>{total == null ? "No registrado" : formatCurrency(String(total))}</b>
+        </div>
+      </div>
+      <section className="sale-detail-section">
+        <h3>Productos</h3>
+        <div className="table-wrap">
+          <table className="sale-detail-items">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Cantidad</th>
+                <th>Precio unitario</th>
+                <th>Tipo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sale.items.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <b>{item.product_name || "Producto no disponible"}</b>
+                    <span className="table-detail">
+                      {[item.product_code, item.product_brand, item.product_category]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </td>
+                  <td>{item.quantity}</td>
+                  <td>{formatCurrency(item.unit_price)}</td>
+                  <td>{item.purchase_type?.replaceAll("_", " ") || "Sin clasificar"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="sale-detail-section">
+        <h3>Notas</h3>
+        <p>{sale.notes || "Sin notas registradas."}</p>
+      </section>
+    </Modal>
+  );
+}
+
 export function Sales({ user }: { user: User }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [advisors, setAdvisors] = useState<User[]>([]);
   const [salesPage, setSalesPage] = useState<Paged<Sale>>({
     items: [],
     page: 1,
@@ -29,29 +135,34 @@ export function Sales({ user }: { user: User }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Sale | null>(null);
   const [removing, setRemoving] = useState<Sale | null>(null);
+  const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [customerModal, setCustomerModal] = useState(false);
   const [customerId, setCustomerId] = useState("");
+  const [advisorId, setAdvisorId] = useState("");
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
   const [channel, setChannel] = useState("TV");
   const [error, setError] = useState("");
   const [saleDirty, setSaleDirty] = useState(false);
-  const [filters, setFilters] = useState({ q: "", product_id: "", status: "" });
+  const [filters, setFilters] = useState({ q: "", product_id: "", status: "", advisor_id: "" });
   const advisor = user.role === "ASESOR";
   const load = async (page = salesPage.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
-    const [customerRows, productRows, saleRows, advisorMetrics] = await Promise.all([
+    const [customerRows, productRows, saleRows, advisorMetrics, advisorRows] = await Promise.all([
       api<Customer[]>("/customers/sale-options"),
       listAll<Product>("/products"),
       api<Paged<Sale> | Sale[]>(`/sales?${query}`),
       advisor ? api<AdvisorSalesMetrics>("/sales/me/metrics") : Promise.resolve(null),
+      advisor ? Promise.resolve([]) : api<User[]>("/users/advisors"),
     ]);
     setCustomers(customerRows);
     setProducts(productRows.filter((product) => product.is_active));
     setSalesPage(asPaged(saleRows, page));
     setMetrics(advisorMetrics);
+    setAdvisors(advisorRows);
   };
   const sales = salesPage.items;
+  const selectedCustomer = customers.find((customer) => customer.id === customerId);
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar el espacio de ventas."));
   }, []);
@@ -83,11 +194,13 @@ export function Sales({ user }: { user: User }) {
     try {
       const payload = {
         customer_id: customerId,
+        advisor_id: !advisor && !editing && advisorId ? advisorId : undefined,
         sale_date: form.get("sale_date"),
         notes: form.get("notes") || null,
         acquisition_channel: channel,
         acquisition_channel_detail:
           channel === "OTROS" ? form.get("acquisition_channel_detail") : null,
+        customer_condition: String(form.get("customer_condition") || "") || undefined,
         items: lines,
       };
       await api(editing ? `/sales/${editing.id}` : "/sales", {
@@ -110,14 +223,17 @@ export function Sales({ user }: { user: User }) {
     const customer = customers.find((row) => row.id === customerId);
     return customer ? `${customer.last_names} ${customer.first_names}` : customerId;
   };
-  const saleProducts = (sale: Sale) =>
-    sale.items
-      .map((item) => {
-        const product = products.find((row) => row.id === item.product_id);
-        const detail = [item.product_brand, item.product_category].filter(Boolean).join(" / ");
-        return `${item.product_name || product?.name || item.product_id}${detail ? ` (${detail})` : ""} x${item.quantity}`;
-      })
-      .join(", ");
+  const saleProductSummary = (sale: Sale) => {
+    const [first, ...remaining] = sale.items;
+    if (!first) return { primary: "Sin productos", secondary: "" };
+    const product = products.find((row) => row.id === first.product_id);
+    return {
+      primary: `${first.product_name || product?.name || "Producto"} x${first.quantity}`,
+      secondary: remaining.length
+        ? `+ ${remaining.length} ${remaining.length === 1 ? "producto" : "productos"}`
+        : first.product_code || "",
+    };
+  };
   return (
     <>
       <div className="page-title">
@@ -134,6 +250,7 @@ export function Sales({ user }: { user: User }) {
           onClick={() => {
             setError("");
             setCustomerId("");
+            setAdvisorId("");
             setLines([{ product_id: "", quantity: 1 }]);
             setChannel("TV");
             setOpen(true);
@@ -167,7 +284,7 @@ export function Sales({ user }: { user: User }) {
           <button
             className="secondary"
             onClick={() => {
-              const reset = { q: "", product_id: "", status: "" };
+              const reset = { q: "", product_id: "", status: "", advisor_id: "" };
               setFilters(reset);
               load(1, reset).catch(() => setError("No fue posible actualizar las ventas."));
             }}
@@ -221,11 +338,29 @@ export function Sales({ user }: { user: User }) {
                 <option value="RECHAZADA_DUPLICADO">Rechazada</option>
               </select>
             </label>
+            {!advisor && (
+              <label>
+                Asesor que registró
+                <select
+                  value={filters.advisor_id}
+                  onChange={(event) =>
+                    setFilters((value) => ({ ...value, advisor_id: event.target.value }))
+                  }
+                >
+                  <option value="">Todos los asesores</option>
+                  {advisors.map((advisor) => (
+                    <option key={advisor.id} value={advisor.id}>
+                      {advisor.full_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button>Aplicar filtros</button>
           </div>
         </form>
       </section>
-      <section className="panel sales-history">
+      <section className="panel sales-history sales-register-panel">
         <div className="panel-heading">
           <div>
             <h2>{advisor ? "Ventas de mi cartera" : "Historial de ventas"}</h2>
@@ -243,19 +378,17 @@ export function Sales({ user }: { user: User }) {
           <table>
             <thead>
               <tr>
-                <th>Fecha</th>
-                <th>Registrada por</th>
                 <th>Cliente</th>
+                <th>Fecha</th>
                 <th>Productos</th>
+                <th>Registrada por</th>
                 <th>Estado</th>
-                {!advisor && <th aria-label="Acciones" />}
+                <th aria-label="Acciones" />
               </tr>
             </thead>
             <tbody>
               {sales.map((sale) => (
                 <tr key={sale.id}>
-                  <td>{sale.sale_date}</td>
-                  <td>{sale.advisor_full_name || sale.advisor_id}</td>
                   <td>
                     {customerName(sale)}
                     {(sale.customer_dni || sale.customer_phone) && (
@@ -266,46 +399,63 @@ export function Sales({ user }: { user: User }) {
                       </small>
                     )}
                   </td>
-                  <td>{saleProducts(sale)}</td>
+                  <td>{formatDate(sale.sale_date)}</td>
                   <td>
-                    <span
-                      className={`status ${sale.status === "CONFIRMADA" ? "success" : "neutral"}`}
-                    >
+                    {(() => {
+                      const summary = saleProductSummary(sale);
+                      return (
+                        <>
+                          <b>{summary.primary}</b>
+                          {summary.secondary && (
+                            <span className="table-detail">{summary.secondary}</span>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </td>
+                  <td>{sale.advisor_full_name || sale.advisor_id}</td>
+                  <td>
+                    <span className={saleStatusClass(sale.status)}>
                       {sale.status.replaceAll("_", " ")}
                     </span>
                   </td>
-                  {!advisor && (
-                    <td>
-                      <div className="row-actions">
-                        <button
-                          className="link"
-                          onClick={() => {
-                            setError("");
-                            setCustomerId(sale.customer_id);
-                            setLines(
-                              sale.items.map((item) => ({
-                                product_id: item.product_id,
-                                quantity: item.quantity,
-                              })),
-                            );
-                            setChannel(sale.acquisition_channel || "TV");
-                            setEditing(sale);
-                            setOpen(true);
-                          }}
-                        >
-                          Editar
-                        </button>
-                        <button className="link danger-link" onClick={() => setRemoving(sale)}>
-                          Eliminar
-                        </button>
-                      </div>
-                    </td>
-                  )}
+                  <td>
+                    <div className="row-actions">
+                      <button className="secondary" onClick={() => setSelectedSale(sale)}>
+                        Ver
+                      </button>
+                      {!advisor && (
+                        <>
+                          <button
+                            className="link"
+                            onClick={() => {
+                              setError("");
+                              setCustomerId(sale.customer_id);
+                              setLines(
+                                sale.items.map((item) => ({
+                                  product_id: item.product_id,
+                                  quantity: item.quantity,
+                                })),
+                              );
+                              setChannel(sale.acquisition_channel || "TV");
+                              setEditing(sale);
+                              setOpen(true);
+                            }}
+                          >
+                            Editar
+                          </button>
+                          <button className="link danger-link" onClick={() => setRemoving(sale)}>
+                            Eliminar
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
               {!sales.length && (
                 <tr>
-                  <td colSpan={advisor ? 5 : 6}>No hay ventas registradas.</td>
+                  <td colSpan={6}>No hay ventas registradas.</td>
                 </tr>
               )}
             </tbody>
@@ -324,25 +474,48 @@ export function Sales({ user }: { user: User }) {
             <div className="form-grid sale-details-grid">
               <label>
                 Cliente
-                <select
+                <SearchSelect
                   value={customerId}
-                  onChange={(event) =>
-                    event.target.value === "__create__"
-                      ? setCustomerModal(true)
-                      : setCustomerId(event.target.value)
-                  }
+                  onChange={setCustomerId}
+                  placeholder="Busca por nombre o DNI"
                   required
-                >
-                  <option value="">Selecciona un cliente</option>
-                  <option value="__create__">Crear cliente</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.last_names} {customer.first_names} - {customer.dni}
-                    </option>
-                  ))}
-                </select>
+                  actionLabel="Crear cliente"
+                  onAction={() => setCustomerModal(true)}
+                  options={customers.map((customer) => ({
+                    value: customer.id,
+                    label: `${customer.last_names} ${customer.first_names} - ${customer.dni}`,
+                  }))}
+                />
                 <small>La venta no cambia el asesor responsable de la cartera.</small>
               </label>
+              {!advisor && !editing && (
+                <label>
+                  Registrar a nombre de
+                  <SearchSelect
+                    value={advisorId}
+                    onChange={setAdvisorId}
+                    placeholder="Supervisor que registra"
+                    options={advisors.map((advisor) => ({
+                      value: advisor.id,
+                      label: advisor.full_name,
+                    }))}
+                  />
+                  <small>
+                    Solo atribuye esta venta; no cambia la cartera ni las alertas del cliente.
+                  </small>
+                </label>
+              )}
+              {selectedCustomer && (
+                <label className="notes" key={selectedCustomer.id}>
+                  Enfermedad o condición
+                  <textarea
+                    name="customer_condition"
+                    defaultValue={selectedCustomer.condition || ""}
+                    maxLength={500}
+                    placeholder="Sin información"
+                  />
+                </label>
+              )}
               <label>
                 Fecha de venta
                 <input
@@ -375,24 +548,22 @@ export function Sales({ user }: { user: User }) {
               <h3>Productos</h3>
               {lines.map((line, index) => (
                 <div className="sale-line" key={index}>
-                  <select
+                  <SearchSelect
                     value={line.product_id}
-                    onChange={(event) =>
+                    placeholder="Busca por código o nombre"
+                    required
+                    onChange={(product_id) =>
                       setLines((current) =>
                         current.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, product_id: event.target.value } : item,
+                          itemIndex === index ? { ...item, product_id } : item,
                         ),
                       )
                     }
-                    required
-                  >
-                    <option value="">Selecciona un producto</option>
-                    {products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name} ({product.code})
-                      </option>
-                    ))}
-                  </select>
+                    options={products.map((product) => ({
+                      value: product.id,
+                      label: `${product.name} (${product.code})`,
+                    }))}
+                  />
                   <input
                     aria-label="Cantidad"
                     type="number"
@@ -452,6 +623,7 @@ export function Sales({ user }: { user: User }) {
           onSave={saveCustomer}
         />
       )}
+      {selectedSale && <SaleDetails sale={selectedSale} onClose={() => setSelectedSale(null)} />}
       {removing && (
         <ConfirmModal
           title="Eliminar venta permanentemente"

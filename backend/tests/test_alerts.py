@@ -67,6 +67,43 @@ def test_inbox_generates_today_alert_without_manual_generation(client: TestClien
     assert audit.actor_id is None and audit.after_data["generation_actor"] == "SYSTEM"
 
 
+def test_advisor_inbox_prioritizes_today_then_nearest_overdue_alerts(client: TestClient, db: Session) -> None:
+    today_sale, _, supervisor_auth, advisor = setup_sale(
+        client, db, date.today() - timedelta(days=30), suffix="31"
+    )
+    recent_sale, _, _, _ = setup_sale(
+        client, db, date.today() - timedelta(days=30), suffix="32"
+    )
+    old_sale, _, _, _ = setup_sale(
+        client, db, date.today() - timedelta(days=30), suffix="33"
+    )
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
+
+    alerts = {
+        alert.sale_item_id: alert
+        for alert in db.query(Alert).filter(
+            Alert.sale_item_id.in_(
+                [today_sale["items"][0]["id"], recent_sale["items"][0]["id"], old_sale["items"][0]["id"]]
+            )
+        )
+    }
+    for alert in alerts.values():
+        alert.assigned_advisor_id = advisor.id
+        alert.next_action_date = None
+    alerts[today_sale["items"][0]["id"]].alert_date = date.today()
+    alerts[recent_sale["items"][0]["id"]].alert_date = date.today() - timedelta(days=1)
+    alerts[old_sale["items"][0]["id"]].alert_date = date.today() - timedelta(days=5)
+    db.commit()
+
+    response = client.get("/api/v1/alerts/inbox", headers=auth(client, advisor.email))
+    assert response.status_code == 200
+    assert [alert["sale_item_id"] for alert in response.json()] == [
+        today_sale["items"][0]["id"],
+        recent_sale["items"][0]["id"],
+        old_sale["items"][0]["id"],
+    ]
+
+
 def test_past_sale_creates_one_pending_or_expired_alert(client: TestClient, db: Session) -> None:
     recent, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=40), duration=30)
     assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).status_code == 200
@@ -119,10 +156,16 @@ def test_confirmed_repurchase_and_annulment_close_active_alerts(client: TestClie
     first_alert = db.query(Alert).filter_by(sale_item_id=sale["items"][0]["id"]).one()
     advisor_auth = auth(client, advisor.email)
     assert client.post("/api/v1/sales", headers=advisor_auth, json={"customer_id": sale["customer_id"], "sale_date": str(date.today()), "source_alert_id": first_alert.id, "items": [{"product_id": product["id"], "quantity": 1}]}).status_code == 422
-    repurchase = client.post(f"/api/v1/alerts/{first_alert.id}/repurchase", headers=advisor_auth, json={"sale_date": str(date.today()), "items": [{"product_id": product["id"], "quantity": 1}]}).json()
+    repurchase = client.post(f"/api/v1/alerts/{first_alert.id}/repurchase", headers=advisor_auth, json={"sale_date": str(date.today()), "notes": "Cliente confirmó la recompra por llamada.", "items": [{"product_id": product["id"], "quantity": 1}]}).json()
     db.refresh(first_alert)
     assert first_alert.status == "RECOMPRA_LOGRADA"
     assert first_alert.closure_reason == f"RECOMPRA_CONFIRMADA: venta {repurchase['id']}"
+    assert first_alert.attempts_count == 1
+    attempt = db.query(AlertContactAttempt).filter_by(alert_id=first_alert.id).one()
+    assert attempt.advisor_id == advisor.id
+    assert attempt.channel == "SISTEMA"
+    assert attempt.result == "RECOMPRA_REGISTRADA"
+    assert attempt.note == "Cliente confirmó la recompra por llamada."
     assert repurchase["items"][0]["expected_repurchase_date"] == str(date.today() + timedelta(days=30))
     new_alert = Alert(sale_item_id=repurchase["items"][0]["id"], assigned_advisor_id=advisor.id, alert_date=date.today(), expected_repurchase_date=date.today() + timedelta(days=30))
     db.add(new_alert)

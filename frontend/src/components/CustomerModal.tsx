@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, listAll } from "../services/api";
+import { api } from "../services/api";
 import type { Customer, LocationDepartment, Role, User } from "../services/types";
 import { Modal } from "./Modal";
 
@@ -26,6 +26,9 @@ export function CustomerModal({
   const [departmentCode, setDepartmentCode] = useState("");
   const [provinceCode, setProvinceCode] = useState("");
   const [ubigeo, setUbigeo] = useState(customer?.ubigeo || "");
+  const [customerType, setCustomerType] = useState<"PERSONA" | "EMPRESA">(
+    customer?.customer_type || "PERSONA",
+  );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -52,10 +55,8 @@ export function CustomerModal({
       })
       .catch(() => setError("No fue posible cargar el catálogo oficial de ubicaciones."));
     if (role !== "ASESOR") {
-      listAll<User>("/users")
-        .then((rows) =>
-          setAdvisors(rows.filter((user) => user.role === "ASESOR" && user.is_active)),
-        )
+      api<User[]>("/users/advisors")
+        .then(setAdvisors)
         .catch(() => setError("No fue posible cargar los asesores activos."));
     }
   }, [customer?.ubigeo, role]);
@@ -63,6 +64,7 @@ export function CustomerModal({
   const department = locations.find((row) => row.code === departmentCode);
   const province = department?.provinces.find((row) => row.code === provinceCode);
   const district = province?.districts.find((row) => row.code === ubigeo);
+  const isCompany = customerType === "EMPRESA";
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -72,12 +74,14 @@ export function CustomerModal({
     try {
       await onSave({
         ...(customer ? {} : { dni: String(form.get("dni") || "") }),
-        first_names: String(form.get("first_names") || ""),
-        last_names: String(form.get("last_names") || ""),
+        customer_type: customerType,
+        business_name: isCompany ? String(form.get("business_name") || "") : undefined,
+        first_names: isCompany ? undefined : String(form.get("first_names") || ""),
+        last_names: isCompany ? undefined : String(form.get("last_names") || ""),
         phone: String(form.get("phone") || ""),
         email: String(form.get("email") || "") || undefined,
         condition: String(form.get("condition") || "") || undefined,
-        birth_date: String(form.get("birth_date") || "") || undefined,
+        birth_date: isCompany ? undefined : String(form.get("birth_date") || "") || undefined,
         department: department?.name,
         province: province?.name,
         district: district?.name,
@@ -97,38 +101,64 @@ export function CustomerModal({
       <form onSubmit={submit} onChange={() => setDirty(true)}>
         <div className="form-grid">
           <label className={customer ? "field-readonly" : ""}>
-            DNI
+            Tipo de cliente
+            <select
+              value={customerType}
+              disabled={Boolean(customer)}
+              onChange={(event) => setCustomerType(event.target.value as "PERSONA" | "EMPRESA")}
+            >
+              <option value="PERSONA">Persona</option>
+              <option value="EMPRESA">Empresa</option>
+            </select>
+          </label>
+          <label className={customer ? "field-readonly" : ""}>
+            {isCompany ? "RUC" : "DNI"}
             <input
               name="dni"
               defaultValue={customer?.dni || ""}
               required
-              minLength={6}
-              maxLength={20}
-              pattern="[A-Za-z0-9]+"
+              minLength={isCompany ? 11 : 6}
+              maxLength={isCompany ? 11 : 20}
+              pattern={isCompany ? "[0-9]{11}" : "[A-Za-z0-9]+"}
               disabled={Boolean(customer)}
             />
-            {customer && <small>El DNI no puede modificarse.</small>}
+            {customer && <small>El documento no puede modificarse.</small>}
           </label>
-          <label>
-            Nombres
-            <input
-              name="first_names"
-              defaultValue={customer?.first_names || ""}
-              required
-              minLength={2}
-              maxLength={120}
-            />
-          </label>
-          <label>
-            Apellidos
-            <input
-              name="last_names"
-              defaultValue={customer?.last_names || ""}
-              required
-              minLength={2}
-              maxLength={120}
-            />
-          </label>
+          {isCompany ? (
+            <label className="notes">
+              Razón social
+              <input
+                name="business_name"
+                defaultValue={customer?.business_name || ""}
+                required
+                minLength={2}
+                maxLength={255}
+              />
+            </label>
+          ) : (
+            <>
+              <label>
+                Nombres
+                <input
+                  name="first_names"
+                  defaultValue={customer?.first_names || ""}
+                  required
+                  minLength={2}
+                  maxLength={120}
+                />
+              </label>
+              <label>
+                Apellidos
+                <input
+                  name="last_names"
+                  defaultValue={customer?.last_names || ""}
+                  required
+                  minLength={2}
+                  maxLength={120}
+                />
+              </label>
+            </>
+          )}
           <label>
             Teléfono
             <input
@@ -143,15 +173,17 @@ export function CustomerModal({
             Correo
             <input name="email" type="email" defaultValue={customer?.email || ""} />
           </label>
-          <label>
-            Fecha de nacimiento
-            <input
-              name="birth_date"
-              type="date"
-              max={new Date().toISOString().slice(0, 10)}
-              defaultValue={customer?.birth_date || ""}
-            />
-          </label>
+          {!isCompany && (
+            <label>
+              Fecha de nacimiento
+              <input
+                name="birth_date"
+                type="date"
+                max={new Date().toISOString().slice(0, 10)}
+                defaultValue={customer?.birth_date || ""}
+              />
+            </label>
+          )}
           {role !== "ASESOR" && (
             <label>
               Asesor responsable

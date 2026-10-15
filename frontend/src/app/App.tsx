@@ -23,6 +23,14 @@ export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [ready, setReady] = useState(false);
+  const [visitedViews, setVisitedViews] = useState<Set<View>>(() => new Set(["dashboard"]));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [openNavGroups, setOpenNavGroups] = useState<Record<string, boolean>>({
+    Principal: false,
+    Operación: false,
+    Administración: false,
+  });
   useEffect(() => {
     api<User>("/auth/me")
       .then(setUser)
@@ -36,77 +44,154 @@ export function App() {
         onLogin={(nextUser) => {
           setUser(nextUser);
           setView("dashboard");
+          setVisitedViews(new Set(["dashboard"]));
         }}
       />
     );
   const supervisor = user.role !== "ASESOR";
-  const nav: Array<[View, string]> = [
-    ["dashboard", "Resumen"],
-    ["sales", "Ventas"],
-    ["alert-register", "Registro de alertas"],
+  const navGroups: Array<{ label: string; items: Array<[View, string]> }> = [
+    { label: "Principal", items: [["dashboard", "Resumen"]] },
+    {
+      label: "Operación",
+      items: [
+        ["sales", "Ventas"],
+        ["alert-register", "Registro de alertas"],
+        ...(supervisor
+          ? [
+              ["recovery", "Recuperación"],
+              ["operations", "Importaciones y reportes"],
+            ]
+          : []),
+      ] as Array<[View, string]>,
+    },
   ];
-  if (supervisor)
-    nav.push(
-      ["recovery", "Recuperación"],
-      ["operations", "Importaciones y reportes"],
-      ["customers", "Clientes"],
-      ["products", "Productos"],
-      ["configuration", "Tipificaciones"],
-    );
-  if (user.role === "ADMIN") nav.push(["users", "Usuarios"]);
-  const content =
-    view === "dashboard" ? (
+  if (supervisor) {
+    navGroups.push({
+      label: "Administración",
+      items: [
+        ["customers", "Clientes"],
+        ["products", "Productos"],
+        ["configuration", "Tipificaciones"],
+        ...(user.role === "ADMIN" ? [["users", "Usuarios"] as [View, string]] : []),
+      ],
+    });
+  }
+  const renderView = (activeView: View) =>
+    activeView === "dashboard" ? (
       <Dashboard user={user} />
-    ) : view === "sales" ? (
+    ) : activeView === "sales" ? (
       <Sales user={user} />
-    ) : view === "alert-register" ? (
+    ) : activeView === "alert-register" ? (
       <AlertRegister />
-    ) : view === "recovery" ? (
+    ) : activeView === "recovery" ? (
       supervisor ? (
         <RecoveryQueue />
       ) : (
         <Dashboard user={user} />
       )
-    ) : view === "configuration" ? (
+    ) : activeView === "configuration" ? (
       <Configuration />
-    ) : view === "operations" ? (
+    ) : activeView === "operations" ? (
       <Operations />
     ) : (
-      <Maintenance kind={view} user={user} />
+      <Maintenance kind={activeView} user={user} />
     );
+  const navigate = (nextView: View) => {
+    setVisitedViews((views) => new Set(views).add(nextView));
+    setView(nextView);
+  };
   return (
-    <div className="shell">
-      <aside>
-        <div className="brand">
-          <span>RB</span>
-          <b>
-            RECOMPRA
-            <br />
-            BOHR
-          </b>
+    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <aside className="app-sidebar">
+        <div className="sidebar-top">
+          <div className="brand">
+            <img src="/bohr-flow-sin-fondo-ajustado.png" alt="BOHR Flow" />
+          </div>
         </div>
         <nav>
-          {nav.map(([id, label]) => (
-            <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}>
-              {label}
-            </button>
+          {navGroups.map((group) => (
+            <section className="nav-group" key={group.label} aria-label={group.label}>
+              <button
+                className="nav-group-toggle"
+                type="button"
+                onClick={() =>
+                  setOpenNavGroups((groups) => ({ ...groups, [group.label]: !groups[group.label] }))
+                }
+                aria-expanded={openNavGroups[group.label]}
+              >
+                <span>{group.label}</span>
+                <span className="nav-disclosure" aria-hidden="true">
+                  {openNavGroups[group.label] ? "-" : "+"}
+                </span>
+              </button>
+              {openNavGroups[group.label] && (
+                <div className="nav-group-items">
+                  {group.items.map(([id, label]) => (
+                    <button
+                      key={id}
+                      className={view === id ? "active" : ""}
+                      onClick={() => navigate(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
           ))}
         </nav>
-        <div className="profile">
-          <b>{user.full_name}</b>
-          <small>{user.role}</small>
+        <div className="profile-card">
           <button
-            onClick={() => {
-              clearToken();
-              setUser(null);
-              setView("dashboard");
-            }}
+            className="profile-trigger"
+            type="button"
+            onClick={() => setProfileMenuOpen((open) => !open)}
+            aria-expanded={profileMenuOpen}
+            aria-label="Abrir opciones de usuario"
           >
-            Cerrar sesión
+            <span className="profile-initials" aria-hidden="true">
+              {user.full_name
+                .split(" ")
+                .slice(0, 2)
+                .map((part) => part[0])
+                .join("")}
+            </span>
+            <span className="profile-details">
+              <b>{user.full_name}</b>
+              <small>{user.role}</small>
+            </span>
+            <span className="profile-disclosure" aria-hidden="true">
+              {profileMenuOpen ? "-" : "+"}
+            </span>
           </button>
+          {profileMenuOpen && (
+            <div className="profile-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  clearToken();
+                  setUser(null);
+                  setView("dashboard");
+                  setVisitedViews(new Set(["dashboard"]));
+                }}
+              >
+                Cerrar sesión
+              </button>
+            </div>
+          )}
         </div>
       </aside>
-      <main className="content">{content}</main>
+      <main className="content">
+        <div className="content-sidebar-control">
+          <button type="button" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+            {sidebarCollapsed ? "Mostrar panel" : "Ocultar panel"}
+          </button>
+        </div>
+        {Array.from(visitedViews).map((visitedView) => (
+          <section key={visitedView} hidden={view !== visitedView}>
+            {renderView(visitedView)}
+          </section>
+        ))}
+      </main>
     </div>
   );
 }

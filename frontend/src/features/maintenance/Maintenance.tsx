@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
 import { CustomerModal } from "../../components/CustomerModal";
 import { ConfirmModal, Modal } from "../../components/Modal";
-import { api, listAll } from "../../services/api";
+import { api, download, listAll } from "../../services/api";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import type {
   CatalogItem,
@@ -13,6 +13,13 @@ import type {
   User,
 } from "../../services/types";
 type Kind = "customers" | "products" | "users";
+type MaintenanceFilters = Record<string, string>;
+const emptyFilters = (kind: Kind): MaintenanceFilters =>
+  kind === "customers"
+    ? { q: "", document: "", phone: "", advisor_id: "", customer_type: "" }
+    : kind === "products"
+      ? { q: "", brand_id: "", category_id: "", is_active: "" }
+      : {};
 const definitions = {
   customers: {
     title: "Clientes",
@@ -70,26 +77,56 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
   });
   const [editing, setEditing] = useState<Customer | Product | User | null | undefined>(undefined);
   const [creatingProduct, setCreatingProduct] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [catalog, setCatalog] = useState<"brands" | "product-categories" | null>(null);
+  const [filters, setFilters] = useState<MaintenanceFilters>(() => emptyFilters(kind));
+  const [advisors, setAdvisors] = useState<User[]>([]);
+  const [brands, setBrands] = useState<CatalogItem[]>([]);
+  const [categories, setCategories] = useState<CatalogItem[]>([]);
   const d = definitions[kind];
-  const load = (page = data.page) => {
+  const load = (page = data.page, activeFilters = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     if (kind === "products") query.set("include_inactive", "true");
+    Object.entries(activeFilters).forEach(([key, value]) => value && query.set(key, value));
     return api<Paged<Customer | Product | User> | Array<Customer | Product | User>>(
       `/${kind}?${query}`,
     ).then((value) => setData(asPaged(value, page)));
   };
   useEffect(() => {
-    load().catch(() => setData({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 }));
+    const nextFilters = emptyFilters(kind);
+    setFilters(nextFilters);
+    load(1, nextFilters).catch(() =>
+      setData({ items: [], page: 1, page_size: PAGE_SIZE, total: 0, pages: 0 }),
+    );
+    if (kind === "customers" && user.role !== "ASESOR") {
+      api<User[]>("/users/advisors")
+        .then(setAdvisors)
+        .catch(() => setAdvisors([]));
+    }
+    if (kind === "products") {
+      Promise.all([listAll<CatalogItem>("/brands"), listAll<CatalogItem>("/product-categories")])
+        .then(([brandRows, categoryRows]) => {
+          setBrands(brandRows);
+          setCategories(categoryRows);
+        })
+        .catch(() => {
+          setBrands([]);
+          setCategories([]);
+        });
+    }
   }, [kind]);
   const rows = data.items;
+  const headers =
+    kind === "customers"
+      ? ["Cliente", "Documento", "Número", "Estado"]
+      : ["Nombre", "Referencia", "Detalle", "Estado / rol"];
   const display = (r: Customer | Product | User) =>
     "full_name" in r
       ? [r.full_name, r.email, r.role, r.is_active ? "Activo" : "Inactivo"]
       : "dni" in r
-        ? [`${r.first_names} ${r.last_names}`, r.dni, r.phone, r.status]
+        ? [r.business_name || `${r.first_names} ${r.last_names}`.trim(), r.dni, r.phone, r.status]
         : [
             r.name,
             r.code,
@@ -97,6 +134,13 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
             r.is_active ? "Activo" : "Inactivo",
           ];
   const canWrite = kind !== "users" || user.role === "ADMIN";
+  const showActions = kind !== "users" || canWrite;
+  const exportRows = async () => {
+    const query = new URLSearchParams();
+    if (kind === "products") query.set("include_inactive", "true");
+    Object.entries(filters).forEach(([key, value]) => value && query.set(key, value));
+    await download(`/${kind}/export.xlsx?${query}`, `${kind}.xlsx`);
+  };
   return (
     <>
       <div className="page-title">
@@ -119,6 +163,11 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
                 </button>
               </>
             )}
+            {(kind === "customers" || kind === "products") && (
+              <button className="secondary" onClick={() => exportRows().catch(() => {})}>
+                Exportar Excel
+              </button>
+            )}
             <button
               onClick={() => (kind === "products" ? setCreatingProduct(true) : setEditing(null))}
             >
@@ -128,15 +177,160 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
         )}
       </div>
       <section className="panel">
+        {kind === "customers" && (
+          <form
+            className="maintenance-filters"
+            onSubmit={(event) => {
+              event.preventDefault();
+              load(1).catch(() => {});
+            }}
+          >
+            <label>
+              Buscar cliente
+              <input
+                value={filters.q}
+                placeholder="Nombre o razón social"
+                onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+              />
+            </label>
+            <label>
+              DNI o RUC
+              <input
+                value={filters.document}
+                placeholder="Número de documento"
+                onChange={(event) => setFilters({ ...filters, document: event.target.value })}
+              />
+            </label>
+            <label>
+              Teléfono
+              <input
+                value={filters.phone}
+                placeholder="Número telefónico"
+                onChange={(event) => setFilters({ ...filters, phone: event.target.value })}
+              />
+            </label>
+            <label>
+              Tipo
+              <select
+                value={filters.customer_type}
+                onChange={(event) => setFilters({ ...filters, customer_type: event.target.value })}
+              >
+                <option value="">Todos</option>
+                <option value="PERSONA">Persona</option>
+                <option value="EMPRESA">Empresa</option>
+              </select>
+            </label>
+            {user.role !== "ASESOR" && (
+              <label>
+                Asesor asignado
+                <select
+                  value={filters.advisor_id}
+                  onChange={(event) => setFilters({ ...filters, advisor_id: event.target.value })}
+                >
+                  <option value="">Todos</option>
+                  {advisors.map((advisor) => (
+                    <option key={advisor.id} value={advisor.id}>
+                      {advisor.full_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div className="maintenance-filter-actions">
+              <button>Filtrar</button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  const nextFilters = emptyFilters(kind);
+                  setFilters(nextFilters);
+                  load(1, nextFilters).catch(() => {});
+                }}
+              >
+                Limpiar
+              </button>
+            </div>
+          </form>
+        )}
+        {kind === "products" && (
+          <form
+            className="maintenance-filters"
+            onSubmit={(event) => {
+              event.preventDefault();
+              load(1).catch(() => {});
+            }}
+          >
+            <label>
+              Buscar producto
+              <input
+                value={filters.q}
+                placeholder="Nombre o código"
+                onChange={(event) => setFilters({ ...filters, q: event.target.value })}
+              />
+            </label>
+            <label>
+              Marca
+              <select
+                value={filters.brand_id}
+                onChange={(event) => setFilters({ ...filters, brand_id: event.target.value })}
+              >
+                <option value="">Todas</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>
+                    {brand.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Categoría
+              <select
+                value={filters.category_id}
+                onChange={(event) => setFilters({ ...filters, category_id: event.target.value })}
+              >
+                <option value="">Todas</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Estado
+              <select
+                value={filters.is_active}
+                onChange={(event) => setFilters({ ...filters, is_active: event.target.value })}
+              >
+                <option value="">Todos</option>
+                <option value="true">Activo</option>
+                <option value="false">Inactivo</option>
+              </select>
+            </label>
+            <div className="maintenance-filter-actions">
+              <button>Filtrar</button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  const nextFilters = emptyFilters(kind);
+                  setFilters(nextFilters);
+                  load(1, nextFilters).catch(() => {});
+                }}
+              >
+                Limpiar
+              </button>
+            </div>
+          </form>
+        )}
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Nombre</th>
-                <th>Referencia</th>
-                <th>Detalle</th>
-                <th>Estado / rol</th>
-                {canWrite && <th />}
+                {headers.map((header) => (
+                  <th key={header}>{header}</th>
+                ))}
+                {showActions && <th />}
               </tr>
             </thead>
             <tbody>
@@ -145,21 +339,28 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
                   {display(r).map((v, i) => (
                     <td key={i}>{v}</td>
                   ))}
-                  {canWrite && (
+                  {showActions && (
                     <td className="maintenance-actions">
-                      {kind === "products" && (
-                        <button className="link" onClick={() => setSelectedProduct(r as Product)}>
-                          Reglas
+                      {kind === "customers" && (
+                        <button className="link" onClick={() => setSelectedCustomer(r as Customer)}>
+                          Ver
                         </button>
                       )}
-                      <button
-                        className="link"
-                        onClick={() =>
-                          kind === "products" ? setEditingProduct(r as Product) : setEditing(r)
-                        }
-                      >
-                        Editar
-                      </button>
+                      {kind === "products" && (
+                        <button className="link" onClick={() => setSelectedProduct(r as Product)}>
+                          Ver
+                        </button>
+                      )}
+                      {canWrite && (
+                        <button
+                          className="link"
+                          onClick={() =>
+                            kind === "products" ? setEditingProduct(r as Product) : setEditing(r)
+                          }
+                        >
+                          Editar
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -187,6 +388,15 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
             });
             await load();
           }}
+        />
+      )}
+      {selectedCustomer && (
+        <CustomerDetailsModal
+          customer={selectedCustomer}
+          advisor={advisors.find(
+            (advisor) => advisor.id === selectedCustomer.responsible_advisor_id,
+          )}
+          onClose={() => setSelectedCustomer(null)}
         />
       )}
       {editing !== undefined && kind === "users" && (
@@ -661,6 +871,73 @@ function CatalogModal({
         />
       )}
     </>
+  );
+}
+
+function CustomerDetailsModal({
+  customer,
+  advisor,
+  onClose,
+}: {
+  customer: Customer;
+  advisor?: User;
+  onClose: () => void;
+}) {
+  const isCompany = customer.customer_type === "EMPRESA";
+  const location = [customer.district, customer.province, customer.department]
+    .filter(Boolean)
+    .join(", ");
+  return (
+    <Modal title="Ficha del cliente" onClose={onClose}>
+      <div className="customer-detail-heading">
+        <div>
+          <p className="eyebrow">{isCompany ? "EMPRESA" : "PERSONA"}</p>
+          <h3>
+            {customer.business_name || `${customer.first_names} ${customer.last_names}`.trim()}
+          </h3>
+        </div>
+        <span className={customer.status === "ACTIVO" ? "status-active" : "status-inactive"}>
+          {customer.status}
+        </span>
+      </div>
+      <dl className="customer-details">
+        <div>
+          <dt>{isCompany ? "RUC" : "DNI"}</dt>
+          <dd>{customer.dni}</dd>
+        </div>
+        <div>
+          <dt>Teléfono</dt>
+          <dd>{customer.phone}</dd>
+        </div>
+        <div>
+          <dt>Correo</dt>
+          <dd>{customer.email || "No registrado"}</dd>
+        </div>
+        <div>
+          <dt>Asesor asignado</dt>
+          <dd>{advisor?.full_name || "Sin asignar"}</dd>
+        </div>
+        {!isCompany && (
+          <div>
+            <dt>Fecha de nacimiento</dt>
+            <dd>{customer.birth_date || "No registrada"}</dd>
+          </div>
+        )}
+        <div className="customer-details-wide">
+          <dt>Ubicación</dt>
+          <dd>{location || "No registrada"}</dd>
+        </div>
+        <div className="customer-details-wide">
+          <dt>Enfermedad o condición</dt>
+          <dd>{customer.condition || "No registrada"}</dd>
+        </div>
+      </dl>
+      <footer>
+        <button type="button" className="secondary" onClick={onClose}>
+          Cerrar
+        </button>
+      </footer>
+    </Modal>
   );
 }
 

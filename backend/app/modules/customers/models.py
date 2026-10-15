@@ -12,6 +12,8 @@ class Customer(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     dni: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    customer_type: Mapped[str] = mapped_column(String(10), default="PERSONA")
+    business_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     first_names: Mapped[str] = mapped_column(String(120))
     last_names: Mapped[str] = mapped_column(String(120))
     phone: Mapped[str] = mapped_column(String(30))

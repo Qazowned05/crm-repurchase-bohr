@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     access_token_minutes: int = 60
     reset_token_minutes: int = 30
     import_max_file_size: int = 5 * 1024 * 1024
-    import_max_rows: int = 1000
+    import_max_rows: int = 10000
     alert_active_window_days: int = 30
     alert_scheduler_poll_seconds: int = 60
 

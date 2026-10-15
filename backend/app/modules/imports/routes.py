@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.styles import Font
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -33,10 +33,11 @@ from app.data.ubigeo import locations, location_hierarchy
 router = APIRouter(prefix="/api/v1/imports", tags=["imports"])
 
 HEADERS = {
-    "customers": ["dni", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"],
+    "customers": ["customer_type", "dni", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"],
     "products": ["code", "name", "brand", "category", "unit_price", "is_active", "duration_days", "alert_days", "effective_from"],
     "historical_sales": ["numero_venta", "customer_dni", "sale_date", "advisor_email", "channel", "channel_detail", "product_code", "quantity", "notes", "historical_unit_price"],
 }
+LEGACY_CUSTOMER_HEADERS = ["dni", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"]
 
 
 def job_response(job: ImportJob, db: Session) -> dict:
@@ -55,6 +56,17 @@ def cell_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def import_date(value: str) -> date:
+    """Accept ISO dates, Excel timestamps, and DD/MM/YYYY spreadsheet dates."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(value).date()
+        except ValueError:
+            return datetime.strptime(value, "%d/%m/%Y").date()
 
 
 def excel_safe(value: object) -> object:
@@ -94,7 +106,8 @@ def workbook_rows(content: bytes, import_type: str) -> tuple[list[dict], list[di
     if sheet.protection.sheet:
         return [], [{"row_number": None, "field": None, "message": "Protected worksheets are not allowed"}]
     headers = [cell_text(cell.value) for cell in sheet[1]]
-    if headers != HEADERS[import_type]:
+    legacy_customers = import_type == "customers" and headers == LEGACY_CUSTOMER_HEADERS
+    if headers != HEADERS[import_type] and not legacy_customers:
         return [], [{"row_number": 1, "field": None, "message": "Headers must exactly match the template"}]
     rows: list[dict] = []
     for row_number, cells in enumerate(sheet.iter_rows(min_row=2), start=2):
@@ -106,7 +119,9 @@ def workbook_rows(content: bytes, import_type: str) -> tuple[list[dict], list[di
         if len(rows) >= settings.import_max_rows:
             add_error(errors, row_number, f"Workbook exceeds {settings.import_max_rows} data rows")
             break
-        row = {header: cell_text(cell.value) for header, cell in zip(HEADERS[import_type], cells, strict=False)}
+        row = {header: cell_text(cell.value) for header, cell in zip(headers, cells, strict=False)}
+        if legacy_customers:
+            row.update({"customer_type": "PERSONA", "business_name": None})
         rows.append({"row_number": row_number, "data": row})
     return rows, errors
 
@@ -136,10 +151,12 @@ def validate_rows(rows: list[dict], import_type: str, db: Session, allow_updates
                 if existing and not allow_updates:
                     raise ValueError("Customer already exists; enable allow_updates to update it")
                 if not existing:
-                    CustomerCreate(**{field: data[field] for field in ("dni", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district")})
+                    customer_payload = CustomerCreate(**{field: data[field] for field in ("dni", "customer_type", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district")})
                 else:
-                    CustomerCreate(**{
+                    customer_payload = CustomerCreate(**{
                         "dni": data["dni"],
+                        "customer_type": data["customer_type"] or existing.customer_type,
+                        "business_name": data["business_name"] if data["business_name"] is not None else existing.business_name,
                         "first_names": data["first_names"] or existing.first_names,
                         "last_names": data["last_names"] or existing.last_names,
                         "phone": data["phone"] or existing.phone,
@@ -150,6 +167,7 @@ def validate_rows(rows: list[dict], import_type: str, db: Session, allow_updates
                         "province": data["province"] if data["province"] is not None else existing.province,
                         "district": data["district"] if data["district"] is not None else existing.district,
                     })
+                data.update(customer_payload.model_dump(mode="json"))
                 location_fields = ("department", "province", "district")
                 supplied_location = [data[field] is not None for field in location_fields]
                 if any(supplied_location) and not all(supplied_location):
@@ -193,9 +211,10 @@ def validate_rows(rows: list[dict], import_type: str, db: Session, allow_updates
                 if supplied:
                     data["duration_days"] = int(data["duration_days"])
                     data["alert_days"] = [int(day.strip()) for day in data["alert_days"].split(",")]
-                    data["effective_from"] = date.fromisoformat(data["effective_from"]).isoformat()
+                    effective_from = import_date(data["effective_from"])
+                    data["effective_from"] = effective_from.isoformat()
                     RuleCreate(**{field: data[field] for field in rule_fields})
-                    if existing and db.scalar(select(ProductRepurchaseRule).where(ProductRepurchaseRule.product_id == existing.id, ProductRepurchaseRule.effective_from == date.fromisoformat(data["effective_from"]))) is not None:
+                    if existing and db.scalar(select(ProductRepurchaseRule).where(ProductRepurchaseRule.product_id == existing.id, ProductRepurchaseRule.effective_from == effective_from)) is not None:
                         raise ValueError("A repurchase rule already exists for this effective date")
             valid.append({"row_number": row_number, "action": action, "data": data})
         except (ValidationError, ValueError, TypeError) as error:
@@ -207,16 +226,51 @@ def validate_historical_sales(rows: list[dict], db: Session) -> tuple[list[dict]
     errors: list[dict] = []
     valid: list[dict] = []
     sales: dict[str, dict] = {}
+    customer_dnis = {(row["data"]["customer_dni"] or "").upper() for row in rows}
+    advisor_emails = {(row["data"]["advisor_email"] or "").lower() for row in rows}
+    product_codes = {(row["data"]["product_code"] or "").upper() for row in rows}
+    references = {(row["data"]["numero_venta"] or "").upper() for row in rows}
+    customers = {
+        customer.dni: customer
+        for customer in db.scalars(select(Customer).where(Customer.dni.in_(customer_dnis)))
+    }
+    advisors = {
+        advisor.email: advisor
+        for advisor in db.scalars(select(User).where(User.email.in_(advisor_emails)))
+    }
+    products = {
+        product.code: product
+        for product in db.scalars(select(Product).where(Product.code.in_(product_codes)))
+    }
+    rules_by_product: dict[str, list[ProductRepurchaseRule]] = {}
+    for rule in db.scalars(
+        select(ProductRepurchaseRule)
+        .where(ProductRepurchaseRule.product_id.in_([product.id for product in products.values()]))
+        .order_by(ProductRepurchaseRule.product_id, ProductRepurchaseRule.effective_from.desc())
+    ):
+        rules_by_product.setdefault(rule.product_id, []).append(rule)
+    existing_sales = {
+        sale.external_reference: sale
+        for sale in db.scalars(select(Sale).where(Sale.external_reference.in_(references)))
+    }
+    existing_items = {
+        (item.sale_id, item.product_id): item
+        for item in db.scalars(
+            select(SaleItem)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.external_reference.in_(references))
+        )
+    }
     for source in rows:
         row_number, data = source["row_number"], source["data"]
         try:
             reference = (data["numero_venta"] or "").upper()
             if not reference:
                 raise ValueError("numero_venta is required")
-            customer = db.scalar(select(Customer).where(Customer.dni == (data["customer_dni"] or "").upper()))
-            advisor = db.scalar(select(User).where(User.email == (data["advisor_email"] or "").lower()))
-            product = db.scalar(select(Product).where(Product.code == (data["product_code"] or "").upper()))
-            sale_date = date.fromisoformat(data["sale_date"] or "")
+            customer = customers.get((data["customer_dni"] or "").upper())
+            advisor = advisors.get((data["advisor_email"] or "").lower())
+            product = products.get((data["product_code"] or "").upper())
+            sale_date = import_date(data["sale_date"] or "")
             quantity = int(data["quantity"] or "")
             channel = (data["channel"] or "").upper()
             if customer is None or customer.status != "ACTIVO": raise ValueError("customer_dni must identify an active customer")
@@ -229,13 +283,14 @@ def validate_historical_sales(rows: list[dict], db: Session) -> tuple[list[dict]
             if channel not in {"TV", "DIGITAL", "OTROS"}: raise ValueError("channel must be TV, DIGITAL, or OTROS")
             if channel == "OTROS" and not data["channel_detail"]: raise ValueError("channel_detail is required for OTROS")
             if channel != "OTROS" and data["channel_detail"]: raise ValueError("channel_detail is only allowed for OTROS")
-            if rule_for(product.id, sale_date, db) is None: raise ValueError("product has no repurchase rule effective on sale_date")
+            if not any(rule.effective_from <= sale_date for rule in rules_by_product.get(product.id, [])):
+                raise ValueError("product has no repurchase rule effective on sale_date")
             sale = sales.setdefault(reference, {"customer_id": customer.id, "advisor_id": advisor.id, "sale_date": sale_date.isoformat(), "channel": channel, "channel_detail": data["channel_detail"], "notes": data["notes"], "products": set()})
             if any(sale[field] != value for field, value in (("customer_id", customer.id), ("advisor_id", advisor.id), ("sale_date", sale_date.isoformat()), ("channel", channel), ("channel_detail", data["channel_detail"]), ("notes", data["notes"]))):
                 raise ValueError("all rows with the same numero_venta must share customer, date, advisor, channel, detail, and notes")
             if product.id in sale["products"]: raise ValueError("a product may only appear once per numero_venta")
             sale["products"].add(product.id)
-            existing_sale = db.scalar(select(Sale).where(Sale.external_reference == reference))
+            existing_sale = existing_sales.get(reference)
             if existing_sale is not None:
                 fields = (
                     ("customer_id", customer.id), ("advisor_id", advisor.id), ("sale_date", sale_date),
@@ -243,7 +298,7 @@ def validate_historical_sales(rows: list[dict], db: Session) -> tuple[list[dict]
                 )
                 if any(getattr(existing_sale, field) != value for field, value in fields):
                     raise ValueError("numero_venta already belongs to a different sale")
-                existing_item = db.scalar(select(SaleItem).where(SaleItem.sale_id == existing_sale.id, SaleItem.product_id == product.id))
+                existing_item = existing_items.get((existing_sale.id, product.id))
                 if existing_item is None or existing_item.quantity != quantity or existing_item.unit_price != historical_unit_price:
                     raise ValueError("numero_venta already exists with different products, quantities, or prices")
                 action = "existing"
@@ -300,9 +355,9 @@ def download_template(import_type: str, _: User = Depends(require_roles("SUPERVI
         for row, advisor in enumerate(advisors, start=1): lists.cell(row=row, column=1, value=excel_safe(advisor.email))
         if advisors:
             validation = DataValidation(type="list", formula1=f"'_lists'!$A$1:$A${len(advisors)}", allow_blank=False)
-            sheet.add_data_validation(validation); validation.add("K2:K1000")
+            sheet.add_data_validation(validation); validation.add("M2:M1000")
         example.append([
-            "70000001", "Ana", "Ejemplo", "999999999", "ana@example.com", "1985-06-15", "",
+            "PERSONA", "70000001", "", "Ana", "Ejemplo", "999999999", "ana@example.com", "1985-06-15", "",
             "LIMA", "LIMA", "MIRAFLORES", advisors[0].email if advisors else "asesor@example.com",
         ])
         # Excel validations use named ranges because dependent dropdowns cannot directly
@@ -343,11 +398,13 @@ def download_template(import_type: str, _: User = Depends(require_roles("SUPERVI
                 ))
                 next_column += 1
         department_validation = DataValidation(type="list", formula1="=departments", allow_blank=False)
-        province_validation = DataValidation(type="list", formula1='=INDIRECT("dep_"&VLOOKUP(H2,department_codes,2,FALSE))', allow_blank=False)
-        district_validation = DataValidation(type="list", formula1='=INDIRECT("prov_"&VLOOKUP(I2,INDIRECT("province_codes_"&VLOOKUP(H2,department_codes,2,FALSE)),2,FALSE))', allow_blank=False)
-        sheet.add_data_validation(department_validation); department_validation.add("H2:H1000")
-        sheet.add_data_validation(province_validation); province_validation.add("I2:I1000")
-        sheet.add_data_validation(district_validation); district_validation.add("J2:J1000")
+        customer_type_validation = DataValidation(type="list", formula1='"PERSONA,EMPRESA"', allow_blank=False)
+        province_validation = DataValidation(type="list", formula1='=INDIRECT("dep_"&VLOOKUP(J2,department_codes,2,FALSE))', allow_blank=False)
+        district_validation = DataValidation(type="list", formula1='=INDIRECT("prov_"&VLOOKUP(K2,INDIRECT("province_codes_"&VLOOKUP(J2,department_codes,2,FALSE)),2,FALSE))', allow_blank=False)
+        sheet.add_data_validation(customer_type_validation); customer_type_validation.add("A2:A1000")
+        sheet.add_data_validation(department_validation); department_validation.add("J2:J1000")
+        sheet.add_data_validation(province_validation); province_validation.add("K2:K1000")
+        sheet.add_data_validation(district_validation); district_validation.add("L2:L1000")
     else:
         advisors = list(db.scalars(select(User).where(User.role == "ASESOR", User.is_active.is_(True)).order_by(User.email)))
         products = list(db.scalars(select(Product).where(Product.is_active.is_(True)).order_by(Product.code)))
@@ -425,6 +482,83 @@ def download_errors(job_id: str, current_user: User = Depends(require_roles("SUP
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="import_{job.id}_errors.xlsx"'})
 
 
+def commit_historical_sales(rows: list[dict], current_user: User, job: ImportJob, db: Session) -> None:
+    grouped_sales: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped_sales.setdefault(row["data"]["numero_venta"], []).append(row["data"])
+
+    references = set(grouped_sales)
+    existing_references = set(db.scalars(select(Sale.external_reference).where(Sale.external_reference.in_(references))))
+    grouped_sales = {reference: lines for reference, lines in grouped_sales.items() if reference not in existing_references}
+    product_ids = {line["product_id"] for lines in grouped_sales.values() for line in lines}
+    rules_by_product: dict[str, list[ProductRepurchaseRule]] = {}
+    for rule in db.scalars(
+        select(ProductRepurchaseRule)
+        .where(ProductRepurchaseRule.product_id.in_(product_ids))
+        .order_by(ProductRepurchaseRule.product_id, ProductRepurchaseRule.effective_from.desc())
+    ):
+        rules_by_product.setdefault(rule.product_id, []).append(rule)
+
+    sales_by_reference: dict[str, Sale] = {}
+    for reference, lines in grouped_sales.items():
+        data = lines[0]
+        sale = Sale(
+            customer_id=data["customer_id"], advisor_id=data["advisor_id"], sale_date=date.fromisoformat(data["sale_date"]),
+            notes=data["notes"], status="CONFIRMADA", acquisition_channel=data["channel"],
+            acquisition_channel_detail=data["channel_detail"], external_reference=reference,
+        )
+        sales_by_reference[reference] = sale
+    db.add_all(sales_by_reference.values())
+    db.flush()
+
+    items: list[SaleItem] = []
+    affected_pairs: set[tuple[str, str]] = set()
+    for reference, lines in grouped_sales.items():
+        sale = sales_by_reference[reference]
+        for line in lines:
+            rule = next((rule for rule in rules_by_product[line["product_id"]] if rule.effective_from <= sale.sale_date), None)
+            if rule is None:
+                raise ValueError(f"Product {line['product_id']} no longer has an effective repurchase rule")
+            items.append(SaleItem(
+                sale_id=sale.id, product_id=line["product_id"], quantity=line["quantity"],
+                unit_price=Decimal(line["unit_price"]), rule_duration_days=rule.duration_days,
+                rule_alert_days=rule.alert_days, expected_repurchase_date=sale.sale_date + timedelta(days=rule.duration_days),
+            ))
+            affected_pairs.add((sale.customer_id, line["product_id"]))
+        record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="HISTORICAL_IMPORT", after={"numero_venta": reference, "import_job_id": job.id})
+    db.add_all(items)
+    db.flush()
+
+    chains: dict[tuple[str, str], list[SaleItem]] = {}
+    pair_list = list(affected_pairs)
+    for start in range(0, len(pair_list), 300):
+        for item, sale in db.execute(
+            select(SaleItem, Sale)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.status == "CONFIRMADA", tuple_(Sale.customer_id, SaleItem.product_id).in_(pair_list[start:start + 300]))
+            .order_by(Sale.customer_id, SaleItem.product_id, Sale.sale_date, Sale.created_at, SaleItem.created_at)
+        ):
+            chains.setdefault((sale.customer_id, item.product_id), []).append(item)
+    for chain in chains.values():
+        previous: SaleItem | None = None
+        for item in chain:
+            item.purchase_type = "COMPRA" if previous is None else "RECOMPRA"
+            item.prior_confirmed_item_id = previous.id if previous else None
+            previous = item
+
+    imported_sales = list(sales_by_reference.values())
+    customers = {
+        customer.id: customer
+        for customer in db.scalars(select(Customer).where(Customer.id.in_({sale.customer_id for sale in imported_sales})))
+    }
+    for sale in sorted(imported_sales, key=lambda current: (current.sale_date, current.created_at)):
+        customer = customers[sale.customer_id]
+        if customer.acquisition_channel is None:
+            customer.acquisition_channel = sale.acquisition_channel
+            customer.acquisition_channel_detail = sale.acquisition_channel_detail
+    run_alert_generation(date.today(), db, commit=False)
+
+
 @router.post("/{job_id}/commit")
 def commit_import(job_id: str, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> dict:
     job = db.get(ImportJob, job_id)
@@ -433,17 +567,21 @@ def commit_import(job_id: str, current_user: User = Depends(require_roles("SUPER
     if job.state != "PREVIEW_READY":
         raise HTTPException(status_code=409, detail="Only a clean preview can be committed")
     try:
+        if job.import_type == "historical_sales":
+            commit_historical_sales(job.rows_data, current_user, job, db)
         processed_references: set[str] = set()
         for row in job.rows_data:
             data = row["data"]
+            if job.import_type == "historical_sales":
+                continue
             if job.import_type == "customers":
                 customer = db.scalar(select(Customer).where(Customer.dni == data["dni"]))
                 if customer is None:
-                    customer = Customer(**{field: data[field] for field in ("dni", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "ubigeo", "responsible_advisor_id") if data.get(field) is not None})
+                    customer = Customer(**{field: data[field] for field in ("dni", "customer_type", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "ubigeo", "responsible_advisor_id") if data.get(field) is not None})
                     db.add(customer); db.flush()
                     record_audit(db, actor_id=current_user.id, entity_type="customer", entity_id=customer.id, action="CREATED", after={"dni": customer.dni, "import_job_id": job.id})
                 elif job.allow_updates:
-                    before = {}; changes = {field: data[field] for field in ("first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "ubigeo") if data.get(field) is not None}
+                    before = {}; changes = {field: data[field] for field in ("customer_type", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "ubigeo") if data.get(field) is not None}
                     if "email" in changes:
                         changes["email"] = changes["email"].lower()
                     for field, value in changes.items(): before[field] = getattr(customer, field); setattr(customer, field, value)
@@ -488,22 +626,6 @@ def commit_import(job_id: str, current_user: User = Depends(require_roles("SUPER
                     product_ids.add(line["product_id"])
                 db.flush(); recompute_chain(sale.customer_id, product_ids, db)
                 record_audit(db, actor_id=current_user.id, entity_type="sale", entity_id=sale.id, action="HISTORICAL_IMPORT", after={"numero_venta": data["numero_venta"], "import_job_id": job.id})
-        if job.import_type == "historical_sales":
-            imported_references = {row["data"]["numero_venta"] for row in job.rows_data}
-            for customer_id in {row["data"]["customer_id"] for row in job.rows_data}:
-                customer = db.get(Customer, customer_id)
-                if customer is None or customer.acquisition_channel is not None:
-                    continue
-                earliest = db.scalar(
-                    select(Sale)
-                    .where(Sale.external_reference.in_(imported_references), Sale.customer_id == customer.id, Sale.status == "CONFIRMADA")
-                    .order_by(Sale.sale_date, Sale.created_at)
-                    .limit(1)
-                )
-                if earliest is not None:
-                    customer.acquisition_channel = earliest.acquisition_channel
-                    customer.acquisition_channel_detail = earliest.acquisition_channel_detail
-            run_alert_generation(date.today(), db, commit=False)
         job.state = "COMMITTED"; job.committed_at = datetime.now(timezone.utc)
         record_audit(db, actor_id=current_user.id, entity_type="import_job", entity_id=job.id, action="COMMITTED", after={"total_rows": job.total_rows})
         db.commit()
