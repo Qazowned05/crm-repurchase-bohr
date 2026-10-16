@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, download, listAll, upload } from "../../services/api";
 import type { Product, User } from "../../services/types";
+import { PageHeader } from "../../components/PageHeader";
 
 type ImportType = "customers" | "products" | "historical_sales";
 type ImportResult = {
@@ -91,12 +92,11 @@ export function Operations() {
   ).toString();
   return (
     <>
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">OPERACIÓN</p>
-          <h1>Importaciones y reportes</h1>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="OPERACIÓN"
+        title="Importaciones y reportes"
+        description="Prepara datos operativos y descarga información consolidada para supervisión."
+      />
       <section className="panel operations-panel">
         <div className="operation-section-heading">
           <div>

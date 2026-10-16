@@ -4,6 +4,8 @@ import { CustomerModal } from "../../components/CustomerModal";
 import { ConfirmModal, Modal } from "../../components/Modal";
 import { api, download, listAll } from "../../services/api";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
+import { DataPanel } from "../../components/DataPanel";
+import { PageHeader } from "../../components/PageHeader";
 import type {
   CatalogItem,
   Customer,
@@ -143,40 +145,52 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
   };
   return (
     <>
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">MANTENIMIENTO</p>
-          <h1>{d.title}</h1>
-          {kind === "products" && (
-            <p>Administra productos, marcas, categorías y sus reglas vigentes de recompra.</p>
-          )}
-        </div>
-        {canWrite && (
-          <div className="product-page-actions">
-            {kind === "products" && (
-              <>
-                <button className="secondary" onClick={() => setCatalog("brands")}>
-                  Marcas
+      <PageHeader
+        eyebrow="MANTENIMIENTO"
+        title={d.title}
+        description={
+          kind === "products"
+            ? "Administra productos, marcas, categorías y sus reglas vigentes de recompra."
+            : kind === "customers"
+              ? "Consulta la cartera, datos de contacto e historial de tus clientes."
+              : "Administra los usuarios y permisos de la operación."
+        }
+        actions={
+          canWrite && (
+            <div className="product-page-actions">
+              {kind === "products" && (
+                <>
+                  <button className="secondary" onClick={() => setCatalog("brands")}>
+                    Marcas
+                  </button>
+                  <button className="secondary" onClick={() => setCatalog("product-categories")}>
+                    Categorías
+                  </button>
+                </>
+              )}
+              {(kind === "customers" || kind === "products") && (
+                <button className="secondary" onClick={() => exportRows().catch(() => {})}>
+                  Exportar Excel
                 </button>
-                <button className="secondary" onClick={() => setCatalog("product-categories")}>
-                  Categorías
-                </button>
-              </>
-            )}
-            {(kind === "customers" || kind === "products") && (
-              <button className="secondary" onClick={() => exportRows().catch(() => {})}>
-                Exportar Excel
+              )}
+              <button
+                onClick={() => (kind === "products" ? setCreatingProduct(true) : setEditing(null))}
+              >
+                Nuevo
               </button>
-            )}
-            <button
-              onClick={() => (kind === "products" ? setCreatingProduct(true) : setEditing(null))}
-            >
-              Nuevo
-            </button>
-          </div>
-        )}
-      </div>
-      <section className="panel">
+            </div>
+          )
+        }
+      />
+      <DataPanel
+        title={`Lista de ${d.title.toLowerCase()}`}
+        description="Usa los filtros para encontrar y administrar registros."
+        metric={
+          <span className="header-metric">
+            <b>{data.total}</b> registros
+          </span>
+        }
+      >
         {kind === "customers" && (
           <form
             className="maintenance-filters"
@@ -374,7 +388,7 @@ export function Maintenance({ kind, user }: { kind: Kind; user: User }) {
           </table>
         </div>
         <Pagination data={data} onPageChange={(page) => load(page).catch(() => {})} />
-      </section>
+      </DataPanel>
       {editing !== undefined && kind === "customers" && (
         <CustomerModal
           title={editing ? "Editar cliente" : "Nuevo cliente"}

@@ -21,6 +21,11 @@ export function Modal({
   useEffect(() => {
     openerRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
     const dialog = dialogRef.current;
     dialog
       ?.querySelector<HTMLElement>(
@@ -53,6 +58,8 @@ export function Modal({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
       openerRef.current?.focus();
     };
   }, []);
@@ -74,18 +81,20 @@ export function Modal({
         }}
         onInput={() => setValidationError("")}
       >
-        <header>
+        <header className="modal-header">
           <h2 id={titleId}>{title}</h2>
           <button className="icon" type="button" onClick={onClose} aria-label="Cerrar diálogo">
             x
           </button>
         </header>
-        {validationError && (
-          <p className="form-error" role="alert">
-            {validationError}
-          </p>
-        )}
-        {children}
+        <div className="modal-body">
+          {validationError && (
+            <p className="form-error" role="alert">
+              {validationError}
+            </p>
+          )}
+          {children}
+        </div>
       </section>
     </div>,
     document.body,

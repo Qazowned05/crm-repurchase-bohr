@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { clearToken, api } from "../services/api";
 import type { User } from "../services/types";
 import { Login } from "../features/auth/Login";
@@ -19,18 +20,89 @@ type View =
   | "users"
   | "configuration"
   | "operations";
+
+function NavIcon({ view }: { view: View }) {
+  const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.8 };
+  if (view === "dashboard")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <rect x="3" y="3" width="7" height="7" />
+        <rect x="14" y="3" width="7" height="7" />
+        <rect x="3" y="14" width="7" height="7" />
+        <rect x="14" y="14" width="7" height="7" />
+      </svg>
+    );
+  if (view === "sales")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <path d="M4 19V5m0 14h16" />
+        <path d="m7 15 4-4 3 2 5-6" />
+      </svg>
+    );
+  if (view === "alert-register")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+        <path d="M10 21h4" />
+      </svg>
+    );
+  if (view === "recovery")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <path d="M20 11a8 8 0 1 0 2 5" />
+        <path d="M20 4v7h-7" />
+      </svg>
+    );
+  if (view === "operations")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <path d="M12 3v12" />
+        <path d="m7 8 5-5 5 5" />
+        <path d="M5 14v6h14v-6" />
+      </svg>
+    );
+  if (view === "customers")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3 20c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5" />
+        <path d="M17 7a3 3 0 0 1 0 5.8M18 15c2 .5 3 2.2 3 5" />
+      </svg>
+    );
+  if (view === "products")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <path d="m4 7 8-4 8 4-8 4-8-4Z" />
+        <path d="v10l8 4 8-4V7M12 11v9" />
+      </svg>
+    );
+  if (view === "configuration")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-3v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.1-2.1.1-.1A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.5-1H5.3v-3h.2A1.7 1.7 0 0 0 7 10a1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h3v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2v3h-.2a1.7 1.7 0 0 0-1.4 1Z" />
+      </svg>
+    );
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5" />
+    </svg>
+  );
+}
+
 export function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [view, setView] = useState<View>("dashboard");
   const [ready, setReady] = useState(false);
-  const [visitedViews, setVisitedViews] = useState<Set<View>>(() => new Set(["dashboard"]));
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [openNavGroups, setOpenNavGroups] = useState<Record<string, boolean>>({
-    Principal: false,
-    Operación: false,
-    Administración: false,
+    Principal: true,
+    Operación: true,
+    Administración: true,
   });
+  const location = useLocation();
+  const routerNavigate = useNavigate();
   useEffect(() => {
     api<User>("/auth/me")
       .then(setUser)
@@ -43,12 +115,38 @@ export function App() {
       <Login
         onLogin={(nextUser) => {
           setUser(nextUser);
-          setView("dashboard");
-          setVisitedViews(new Set(["dashboard"]));
+          routerNavigate("/", { replace: true });
         }}
       />
     );
   const supervisor = user.role !== "ASESOR";
+  const viewLabels: Record<View, string> = {
+    dashboard: "Resumen",
+    sales: "Ventas",
+    "alert-register": "Alertas",
+    recovery: "Recuperación",
+    customers: "Clientes",
+    products: "Productos y reglas",
+    users: "Usuarios",
+    configuration: "Tipificaciones",
+    operations: "Operaciones",
+  };
+  const viewPaths: Record<View, string> = {
+    dashboard: "/",
+    sales: "/ventas",
+    "alert-register": "/alertas",
+    recovery: "/recuperacion",
+    customers: "/clientes",
+    products: "/productos",
+    users: "/usuarios",
+    configuration: "/tipificaciones",
+    operations: "/operaciones",
+  };
+  const pathToView = Object.fromEntries(
+    Object.entries(viewPaths).map(([viewId, path]) => [path, viewId]),
+  ) as Record<string, View>;
+  const view = pathToView[location.pathname];
+  if (!view) return <Navigate to="/" replace />;
   const navGroups: Array<{ label: string; items: Array<[View, string]> }> = [
     { label: "Principal", items: [["dashboard", "Resumen"]] },
     {
@@ -97,9 +195,14 @@ export function App() {
       <Maintenance kind={activeView} user={user} />
     );
   const navigate = (nextView: View) => {
-    setVisitedViews((views) => new Set(views).add(nextView));
-    setView(nextView);
+    routerNavigate(viewPaths[nextView]);
   };
+  if (
+    !supervisor &&
+    ["recovery", "customers", "products", "configuration", "operations", "users"].includes(view)
+  )
+    return <Navigate to="/" replace />;
+  if (user.role !== "ADMIN" && view === "users") return <Navigate to="/" replace />;
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="app-sidebar">
@@ -132,7 +235,8 @@ export function App() {
                       className={view === id ? "active" : ""}
                       onClick={() => navigate(id)}
                     >
-                      {label}
+                      <NavIcon view={id} />
+                      <span>{label}</span>
                     </button>
                   ))}
                 </div>
@@ -170,8 +274,7 @@ export function App() {
                 onClick={() => {
                   clearToken();
                   setUser(null);
-                  setView("dashboard");
-                  setVisitedViews(new Set(["dashboard"]));
+                  routerNavigate("/", { replace: true });
                 }}
               >
                 Cerrar sesión
@@ -181,16 +284,24 @@ export function App() {
         </div>
       </aside>
       <main className="content">
-        <div className="content-sidebar-control">
-          <button type="button" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
-            {sidebarCollapsed ? "Mostrar panel" : "Ocultar panel"}
-          </button>
-        </div>
-        {Array.from(visitedViews).map((visitedView) => (
-          <section key={visitedView} hidden={view !== visitedView}>
-            {renderView(visitedView)}
-          </section>
-        ))}
+        <header className="app-header">
+          <div className="app-header-title">
+            <p>CRM RECOMPRA</p>
+            <h1>{viewLabels[view]}</h1>
+          </div>
+          <div className="app-header-actions">
+            <span className="app-role">{user.role}</span>
+            <button
+              type="button"
+              className="sidebar-toggle"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              aria-label={sidebarCollapsed ? "Mostrar navegación" : "Ocultar navegación"}
+            >
+              {sidebarCollapsed ? "Mostrar navegación" : "Ocultar navegación"}
+            </button>
+          </div>
+        </header>
+        <section key={view}>{renderView(view)}</section>
       </main>
     </div>
   );

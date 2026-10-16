@@ -5,6 +5,8 @@ import { SearchSelect } from "../../components/SearchSelect";
 import { api, listAll } from "../../services/api";
 import { StatCard } from "../../components/StatCard";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
+import { DataPanel } from "../../components/DataPanel";
+import { PageHeader } from "../../components/PageHeader";
 import type {
   AdvisorSalesMetrics,
   Customer,
@@ -53,7 +55,7 @@ function SaleDetails({ sale, onClose }: { sale: Sale; onClose: () => void }) {
     : null;
   return (
     <Modal title="Detalle de venta" onClose={onClose}>
-      <div className="alert-summary sale-summary">
+      <div className="alert-summary sale-summary alert-context">
         <div>
           <span>Cliente</span>
           <b>{customerName || "Sin cliente"}</b>
@@ -236,42 +238,53 @@ export function Sales({ user }: { user: User }) {
   };
   return (
     <>
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">VENTAS</p>
-          <h1>Ventas</h1>
-          <p>
-            {advisor
-              ? "Registra ventas y consulta el historial de tu cartera."
-              : "Consulta las ventas registradas por el equipo."}
-          </p>
-        </div>
-        <button
-          onClick={() => {
-            setError("");
-            setCustomerId("");
-            setAdvisorId("");
-            setLines([{ product_id: "", quantity: 1 }]);
-            setChannel("TV");
-            setOpen(true);
-          }}
-        >
-          Registrar venta
-        </button>
-      </div>
+      <PageHeader
+        eyebrow="VENTAS"
+        title="Ventas"
+        description={
+          advisor
+            ? "Registra ventas y consulta el historial de tu cartera."
+            : "Consulta las ventas registradas por el equipo."
+        }
+        actions={
+          <button
+            onClick={() => {
+              setError("");
+              setCustomerId("");
+              setAdvisorId("");
+              setLines([{ product_id: "", quantity: 1 }]);
+              setChannel("TV");
+              setOpen(true);
+            }}
+          >
+            Registrar venta
+          </button>
+        }
+      />
       {advisor && (
         <section className="stats">
-          <StatCard label="Ventas confirmadas" value={metrics?.confirmed_sales ?? "-"} />
+          <StatCard
+            label="Ventas confirmadas"
+            value={metrics?.confirmed_sales ?? "-"}
+            icon="check"
+          />
           <StatCard
             label="Productos confirmados"
             value={metrics?.confirmed_items ?? "-"}
             accent="green"
+            icon="package"
           />
-          <StatCard label="Recompras" value={metrics?.repurchase_sales ?? "-"} accent="purple" />
+          <StatCard
+            label="Recompras"
+            value={metrics?.repurchase_sales ?? "-"}
+            accent="purple"
+            icon="refresh"
+          />
           <StatCard
             label="Productos en recompra"
             value={metrics?.repurchase_items ?? "-"}
             accent="orange"
+            icon="package"
           />
         </section>
       )}
@@ -360,20 +373,20 @@ export function Sales({ user }: { user: User }) {
           </div>
         </form>
       </section>
-      <section className="panel sales-history sales-register-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>{advisor ? "Ventas de mi cartera" : "Historial de ventas"}</h2>
-            <p>
-              {advisor
-                ? "Incluye ventas de tus clientes, incluso si otro asesor las registró."
-                : "Incluye las ventas registradas por todos los asesores."}
-            </p>
-          </div>
+      <DataPanel
+        className="sales-history sales-register-panel"
+        title={advisor ? "Ventas de mi cartera" : "Historial de ventas"}
+        description={
+          advisor
+            ? "Incluye ventas de tus clientes, incluso si otro asesor las registró."
+            : "Incluye las ventas registradas por todos los asesores."
+        }
+        metric={
           <span className="header-metric">
             <b>{salesPage.total}</b> registros
           </span>
-        </div>
+        }
+      >
         <div className="table-wrap">
           <table>
             <thead>
@@ -467,7 +480,7 @@ export function Sales({ user }: { user: User }) {
             load(page).catch(() => setError("No fue posible cargar la página."))
           }
         />
-      </section>
+      </DataPanel>
       {open && (
         <Modal title={editing ? "Editar venta" : "Registrar venta"} onClose={requestCloseSale}>
           <form className="sale-form" onSubmit={submit} onChange={() => setSaleDirty(true)}>

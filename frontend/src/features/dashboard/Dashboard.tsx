@@ -18,6 +18,8 @@ import { StatCard } from "../../components/StatCard";
 import { Modal } from "../../components/Modal";
 import { SearchSelect } from "../../components/SearchSelect";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
+import { DataPanel } from "../../components/DataPanel";
+import { PageHeader } from "../../components/PageHeader";
 import type {
   Alert,
   AlertRepurchaseCreate,
@@ -118,6 +120,7 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
   const [extraRepurchaseLines, setExtraRepurchaseLines] = useState<ExtraRepurchaseLine[]>([]);
   const [managementError, setManagementError] = useState("");
   const [managementSuccess, setManagementSuccess] = useState("");
+  const [clipboardNotice, setClipboardNotice] = useState("");
   const [alertError, setAlertError] = useState("");
   const [alertSummary, setAlertSummary] = useState<AlertSummary>({
     total: 0,
@@ -127,8 +130,10 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
   });
   const [alertFilters, setAlertFilters] = useState({ q: "", status: "", priority: "" });
   const loadMetrics = (period = metricsPeriod) => {
-    const query = new URLSearchParams(period);
-    return api<Metrics>(`/reports/metrics?${query}`).then(setMetrics);
+    const query = new URLSearchParams();
+    if (period.start_date) query.set("start_date", period.start_date);
+    if (period.end_date) query.set("end_date", period.end_date);
+    return api<Metrics>(`/reports/metrics${query.size ? `?${query}` : ""}`).then(setMetrics);
   };
   useEffect(() => {
     loadAlerts(1).catch(() => setAlertError("No es posible mostrar las alertas en este momento."));
@@ -150,6 +155,11 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
         .catch(() => {});
     }
   }, [user.role]);
+  useEffect(() => {
+    if (!clipboardNotice) return;
+    const timer = window.setTimeout(() => setClipboardNotice(""), 2000);
+    return () => window.clearTimeout(timer);
+  }, [clipboardNotice]);
   const alerts = alertPage.items;
   const alertsByCustomer = new Map<string, ManagedAlert[]>();
   alerts.forEach((alert) => {
@@ -181,6 +191,19 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
     setRepurchaseSelection("ORIGINAL");
     setOriginalRepurchase({ product_id: alert.product_id || "", quantity: 1 });
     setExtraRepurchaseLines([]);
+    const dni = alert.customer_dni?.trim();
+    if (dni && navigator.clipboard) {
+      void navigator.clipboard
+        .writeText(dni)
+        .then(() => setClipboardNotice(`DNI ${dni} copiado al portapapeles.`))
+        .catch(() => setClipboardNotice("No fue posible copiar el DNI al portapapeles."));
+    } else {
+      setClipboardNotice(
+        dni
+          ? "No fue posible copiar el DNI al portapapeles."
+          : "La alerta no tiene DNI registrado.",
+      );
+    }
     setSelectedAlert(alert);
     try {
       setSelectedAlert(await api<Alert>(`/alerts/${alert.id}`));
@@ -190,6 +213,7 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
   };
   const closeAlert = () => {
     setSelectedAlert(null);
+    setClipboardNotice("");
     setParentTypificationId("");
     setChildTypificationId("");
     setManagementMode("ATTEMPT");
@@ -259,46 +283,51 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
   };
   return (
     <>
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">{user.role === "ASESOR" ? "MI JORNADA" : "SUPERVISION"}</p>
-          <h1>Hola, {user.full_name.split(" ")[0]}</h1>
-        </div>
-        <div className="dashboard-date-controls">
-          <p>{new Intl.DateTimeFormat("es-PE", { dateStyle: "full" }).format(new Date())}</p>
-          {user.role !== "ASESOR" && (
-            <form
-              className="dashboard-period"
-              onSubmit={(event) => {
-                event.preventDefault();
-                loadMetrics().catch(() => {});
-              }}
-            >
-              <label>
-                Desde
-                <input
-                  type="date"
-                  value={metricsPeriod.start_date}
-                  onChange={(event) =>
-                    setMetricsPeriod((period) => ({ ...period, start_date: event.target.value }))
-                  }
-                />
-              </label>
-              <label>
-                Hasta
-                <input
-                  type="date"
-                  value={metricsPeriod.end_date}
-                  onChange={(event) =>
-                    setMetricsPeriod((period) => ({ ...period, end_date: event.target.value }))
-                  }
-                />
-              </label>
-              <button type="submit">Aplicar</button>
-            </form>
-          )}
-        </div>
-      </div>
+      {clipboardNotice && selectedAlert && (
+        <p className="success-message clipboard-toast" role="status">
+          {clipboardNotice}
+        </p>
+      )}
+      <PageHeader
+        eyebrow={user.role === "ASESOR" ? "MI JORNADA" : "SUPERVISIÓN"}
+        title={`Hola, ${user.full_name.split(" ")[0]}`}
+        meta={
+          <div className="dashboard-date-controls">
+            <p>{new Intl.DateTimeFormat("es-PE", { dateStyle: "full" }).format(new Date())}</p>
+            {user.role !== "ASESOR" && (
+              <form
+                className="dashboard-period"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  loadMetrics().catch(() => {});
+                }}
+              >
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={metricsPeriod.start_date}
+                    onChange={(event) =>
+                      setMetricsPeriod((period) => ({ ...period, start_date: event.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={metricsPeriod.end_date}
+                    onChange={(event) =>
+                      setMetricsPeriod((period) => ({ ...period, end_date: event.target.value }))
+                    }
+                  />
+                </label>
+                <button type="submit">Aplicar</button>
+              </form>
+            )}
+          </div>
+        }
+      />
       {managementSuccess && <p className="success-message">{managementSuccess}</p>}
       {user.role !== "ASESOR" && (
         <section className="stats supervisor-stats">
@@ -306,17 +335,24 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
             label="Facturación total"
             value={metrics ? formatCurrency(metrics.total_revenue) : "-"}
             accent="green"
+            icon="revenue"
           />
           <StatCard
             label="Ingreso por recompra"
             value={metrics ? formatCurrency(metrics.repurchase_revenue) : "-"}
             accent="purple"
+            icon="refresh"
           />
-          <StatCard label="Unidades vendidas" value={metrics ? metrics.total_units_sold : "-"} />
+          <StatCard
+            label="Unidades vendidas"
+            value={metrics ? metrics.total_units_sold : "-"}
+            icon="package"
+          />
           <StatCard
             label="Ticket promedio"
             value={metrics ? formatCurrency(metrics.average_ticket) : "-"}
             accent="orange"
+            icon="ticket"
           />
         </section>
       )}
@@ -344,7 +380,7 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
                       cursor={{ fill: "#f0f6fa" }}
                       formatter={(value) => [`${value} uds.`, "Unidades"]}
                     />
-                    <Bar dataKey="units" fill="#005a9c" radius={[0, 2, 2, 0]}>
+                    <Bar dataKey="units" fill="#005b87" radius={[0, 4, 4, 0]}>
                       <LabelList
                         dataKey="units"
                         position="right"
@@ -382,7 +418,7 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
                       cursor={{ fill: "#edf7f2" }}
                       formatter={(value) => [formatCurrency(Number(value)), "Facturación"]}
                     />
-                    <Bar dataKey="revenue" fill="#00734d" radius={[0, 2, 2, 0]}>
+                    <Bar dataKey="revenue" fill="#6bd098" radius={[0, 4, 4, 0]}>
                       <LabelList
                         dataKey="revenue"
                         position="right"
@@ -458,8 +494,8 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
                       outerRadius={118}
                       paddingAngle={3}
                     >
-                      <Cell fill="#005a9c" />
-                      <Cell fill="#00734d" />
+                      <Cell fill="#005b87" />
+                      <Cell fill="#6bd098" />
                     </Pie>
                     <Tooltip formatter={(value) => [formatCurrency(Number(value)), "Ingresos"]} />
                     <Legend
@@ -479,21 +515,39 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
       {user.role === "ASESOR" ? (
         <>
           <section className="stats advisor-alert-stats">
-            <StatCard label="Para hoy" value={alertSummary.due_today} accent="orange" />
-            <StatCard label="Sin gestión" value={alertSummary.unmanaged} accent="purple" />
-            <StatCard label="Fuera de fecha" value={alertSummary.overdue} accent="green" />
-            <StatCard label="Recompras del mes" value={advisorMetrics?.repurchase_sales ?? "-"} />
+            <StatCard
+              label="Para hoy"
+              value={alertSummary.due_today}
+              accent="orange"
+              icon="calendar"
+            />
+            <StatCard
+              label="Sin gestión"
+              value={alertSummary.unmanaged}
+              accent="purple"
+              icon="ticket"
+            />
+            <StatCard
+              label="Fuera de fecha"
+              value={alertSummary.overdue}
+              accent="green"
+              icon="clock"
+            />
+            <StatCard
+              label="Recompras del mes"
+              value={advisorMetrics?.repurchase_sales ?? "-"}
+              icon="refresh"
+            />
           </section>
-          <section className="panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Mis alertas</h2>
-                <p>Selecciona una alerta para revisar el cliente y registrar la gestión.</p>
-              </div>
+          <DataPanel
+            title="Mis alertas"
+            description="Selecciona una alerta para revisar el cliente y registrar la gestión."
+            metric={
               <span className="header-metric">
                 <b>{alertPage.total}</b> activas
               </span>
-            </div>
+            }
+          >
             <form
               className="alert-inbox-filters"
               onSubmit={(event) => {
@@ -670,14 +724,11 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
               data={alertPage}
               onPageChange={(page) => loadAlerts(page).catch(() => {})}
             />
-          </section>
-          <section className="panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Próximas alertas</h2>
-                <p>Recordatorios informativos; se habilitan para gestión en su fecha.</p>
-              </div>
-            </div>
+          </DataPanel>
+          <DataPanel
+            title="Próximas alertas"
+            description="Recordatorios informativos; se habilitan para gestión en su fecha."
+          >
             <div className="table-wrap">
               <table>
                 <thead>
@@ -723,7 +774,7 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
                 </tbody>
               </table>
             </div>
-          </section>
+          </DataPanel>
         </>
       ) : (
         <>
@@ -797,8 +848,10 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
               <button>Filtrar alertas</button>
             </form>
           </section>
-          <section className="panel">
-            <h2>Próximos vencimientos</h2>
+          <DataPanel
+            title="Próximos vencimientos"
+            description="Alertas activas que requieren seguimiento del equipo."
+          >
             <div className="table-wrap">
               <table>
                 <thead>
@@ -847,65 +900,79 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
               data={alertPage}
               onPageChange={(page) => loadAlerts(page).catch(() => {})}
             />
-          </section>
+          </DataPanel>
         </>
       )}
       {selectedAlert && (
         <Modal title="Gestionar alerta" onClose={closeAlert}>
-          <div className="alert-detail">
+          <section className="alert-detail alert-context">
             <p>
-              <b>Cliente:</b>{" "}
-              {[selectedAlert.customer_first_names, selectedAlert.customer_last_names]
-                .filter(Boolean)
-                .join(" ") || "Sin información"}
+              <span>Cliente</span>
+              <strong>
+                {[selectedAlert.customer_first_names, selectedAlert.customer_last_names]
+                  .filter(Boolean)
+                  .join(" ") || "Sin información"}
+              </strong>
+              {selectedAlert.customer_dni && <small>DNI {selectedAlert.customer_dni}</small>}
             </p>
             <p>
-              <b>Contacto:</b>{" "}
-              {[selectedAlert.customer_phone, selectedAlert.customer_email]
-                .filter(Boolean)
-                .join(" · ") || "Sin información"}
+              <span>Contacto</span>
+              <strong>
+                {[selectedAlert.customer_phone, selectedAlert.customer_email]
+                  .filter(Boolean)
+                  .join(" · ") || "Sin información"}
+              </strong>
             </p>
             <p>
-              <b>Producto:</b>{" "}
-              {[
-                selectedAlert.product_name,
-                selectedAlert.product_brand,
-                selectedAlert.product_category,
-              ]
-                .filter(Boolean)
-                .join(" · ") || "Sin información"}
+              <span>Producto</span>
+              <strong>
+                {[
+                  selectedAlert.product_name,
+                  selectedAlert.product_brand,
+                  selectedAlert.product_category,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "Sin información"}
+              </strong>
             </p>
             <p>
-              <b>Venta original:</b> {selectedAlert.original_sale_date || "Sin información"}
+              <span>Venta original</span>
+              <strong>{selectedAlert.original_sale_date || "Sin información"}</strong>
             </p>
             <p>
-              <b>Vendedor:</b>{" "}
-              {selectedAlert.seller_advisor_name ||
-                selectedAlert.seller_advisor_email ||
-                "Sin información"}
+              <span>Vendedor</span>
+              <strong>
+                {selectedAlert.seller_advisor_name ||
+                  selectedAlert.seller_advisor_email ||
+                  "Sin información"}
+              </strong>
             </p>
             <p>
-              <b>Fecha prevista:</b> {selectedAlert.expected_repurchase_date}
+              <span>Fecha prevista</span>
+              <strong>{selectedAlert.expected_repurchase_date}</strong>
             </p>
             <p>
-              <b>Enfermedad o condición:</b> {selectedAlert.customer_condition || "Sin información"}
+              <span>Enfermedad o condición</span>
+              <strong>{selectedAlert.customer_condition || "Sin información"}</strong>
             </p>
             <p>
-              <b>Tipo de alerta:</b>{" "}
-              {selectedAlert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}
+              <span>Tipo de alerta</span>
+              <strong>{selectedAlert.alert_type?.replaceAll("_", " ") || "AUTOMÁTICA"}</strong>
             </p>
             {selectedAlert.assignment_reason && (
               <p>
-                <b>Motivo de asignación:</b> {selectedAlert.assignment_reason}
+                <span>Motivo de asignación</span>
+                <strong>{selectedAlert.assignment_reason}</strong>
               </p>
             )}
             {selectedAlert.next_action_date && (
               <p>
-                <b>Próxima acción:</b> {selectedAlert.next_action_date}
+                <span>Próxima acción</span>
+                <strong>{selectedAlert.next_action_date}</strong>
               </p>
             )}
-          </div>
-          <form onSubmit={manageAlert}>
+          </section>
+          <form className="alert-management-form" onSubmit={manageAlert}>
             <fieldset className="management-mode-switch">
               <legend>Resultado de la gestión</legend>
               <label className={managementMode === "ATTEMPT" ? "is-selected" : ""}>

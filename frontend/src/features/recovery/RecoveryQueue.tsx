@@ -3,6 +3,8 @@ import { CrudModal } from "../../components/CrudModal";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { SearchSelect } from "../../components/SearchSelect";
 import { api, listAll } from "../../services/api";
+import { DataPanel } from "../../components/DataPanel";
+import { PageHeader } from "../../components/PageHeader";
 import type {
   Paged,
   Product,
@@ -96,19 +98,17 @@ export function RecoveryQueue() {
     });
   return (
     <>
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">SUPERVISIÓN</p>
-          <h1>Cola de recuperación</h1>
-          <p>
-            Prioriza alertas vencidas según antigüedad de venta y reasígnalas al asesor adecuado.
-          </p>
-        </div>
-        <div className="header-metric">
-          <b>{data.total}</b>
-          <span>clientes visibles</span>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="SUPERVISIÓN"
+        title="Cola de recuperación"
+        description="Prioriza alertas vencidas según antigüedad de venta y reasígnalas al asesor adecuado."
+        meta={
+          <span className="header-metric">
+            <b>{data.total}</b>
+            <span>clientes visibles</span>
+          </span>
+        }
+      />
       <section className="panel filters">
         <div className="panel-heading">
           <div>
@@ -268,12 +268,10 @@ export function RecoveryQueue() {
         </form>
         {error && <p className="form-error">{error}</p>}
       </section>
-      <section className="panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Alertas en recuperación</h2>
-            <p>Selecciona alertas de esta página para reasignarlas en bloque.</p>
-          </div>
+      <DataPanel
+        title="Alertas en recuperación"
+        description="Selecciona alertas de esta página para reasignarlas en bloque."
+        actions={
           <div className="row-actions">
             <button
               className="secondary"
@@ -288,7 +286,8 @@ export function RecoveryQueue() {
               Asignar {selectedIds.size} seleccionadas
             </button>
           </div>
-        </div>
+        }
+      >
         <div className="table-wrap">
           {loading && <p className="table-loading">Actualizando cola de recuperación...</p>}
           <table>
@@ -374,7 +373,7 @@ export function RecoveryQueue() {
             load(page).catch(() => setError("No fue posible cargar la página."))
           }
         />
-      </section>
+      </DataPanel>
       {selected && (
         <CrudModal
           title={`Reasignar: ${selected.product_name}`}

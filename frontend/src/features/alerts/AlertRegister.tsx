@@ -3,6 +3,8 @@ import { Modal } from "../../components/Modal";
 import { SearchSelect } from "../../components/SearchSelect";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { api, listAll } from "../../services/api";
+import { DataPanel } from "../../components/DataPanel";
+import { PageHeader } from "../../components/PageHeader";
 import type {
   ContactAttempt,
   ManagedAlert,
@@ -59,6 +61,13 @@ function closureDetail(alert: ManagedAlert) {
   return null;
 }
 
+function truncateDetail(value?: string | null) {
+  if (!value) return value;
+  const words = value.trim().split(/\s+/);
+  if (words.length <= 4) return value;
+  return `${words.slice(0, 4).join(" ")}...`;
+}
+
 function groupByCustomer(alerts: ManagedAlert[]): ManagedAlert[][] {
   const groups = new Map<string, ManagedAlert[]>();
   alerts.forEach((alert) => {
@@ -72,7 +81,7 @@ function AlertDetails({ alert, onClose }: { alert: ManagedAlert; onClose: () => 
   const closed = closedStatuses.has(alert.status);
   return (
     <Modal title="Detalle de gestión" onClose={onClose}>
-      <div className="alert-summary">
+      <div className="alert-summary alert-context">
         <div>
           <span>Cliente</span>
           <b>
@@ -152,12 +161,14 @@ function AlertManagement({
   alert,
   typifications,
   products,
+  clipboardNotice,
   onClose,
   onManaged,
 }: {
   alert: ManagedAlert;
   typifications: TypificationTree[];
   products: Product[];
+  clipboardNotice: string;
   onClose: () => void;
   onManaged: () => Promise<void>;
 }) {
@@ -167,14 +178,14 @@ function AlertManagement({
   const [repurchaseSelection, setRepurchaseSelection] = useState<RepurchaseSelection>("ORIGINAL");
   const [originalQuantity, setOriginalQuantity] = useState(1);
   const [extraLines, setExtraLines] = useState<RepurchaseLine[]>([]);
-  const options = typifications.flatMap((parent) => [
-    { id: parent.id, code: parent.code, label: parent.name },
-    ...parent.children.map((child) => ({
-      id: child.id,
-      code: child.code,
-      label: `${parent.name} / ${child.name}`,
-    })),
-  ]);
+  const [parentTypificationId, setParentTypificationId] = useState("");
+  const [childTypificationId, setChildTypificationId] = useState("");
+  const rootTypifications = typifications.filter((item) => item.is_active);
+  const selectedParent = rootTypifications.find((item) => item.id === parentTypificationId);
+  const childTypifications = selectedParent?.children.filter((item) => item.is_active) || [];
+  const selectedTypification =
+    childTypifications.find((item) => item.id === childTypificationId) ||
+    (selectedParent && childTypifications.length === 0 ? selectedParent : undefined);
   return (
     <Modal title="Gestionar alerta" onClose={onClose}>
       <div className="alert-summary">
@@ -220,14 +231,13 @@ function AlertManagement({
                 }),
               });
             } else {
-              const option = options.find((item) => item.id === form.get("typification_id"));
-              if (!option) throw new Error("Selecciona una tipificación.");
+              if (!selectedTypification) throw new Error("Selecciona una tipificación.");
               await api(`/alerts/${alert.id}/attempts`, {
                 method: "POST",
                 body: JSON.stringify({
                   channel: form.get("channel"),
-                  result: option.code,
-                  typification_id: option.id,
+                  result: selectedTypification.code,
+                  typification_id: selectedTypification.id,
                   note: form.get("note") || undefined,
                   next_action_date: form.get("next_action_date") || undefined,
                 }),
@@ -263,13 +273,42 @@ function AlertManagement({
           <div className="form-grid">
             <label>
               Tipificación
-              <select name="typification_id" required defaultValue="">
+              <select
+                required
+                value={parentTypificationId}
+                onChange={(event) => {
+                  setParentTypificationId(event.target.value);
+                  setChildTypificationId("");
+                }}
+              >
                 <option value="" disabled>
                   Selecciona una tipificación
                 </option>
-                {options.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
+                {rootTypifications.map((typification) => (
+                  <option key={typification.id} value={typification.id}>
+                    {typification.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Subtipificación
+              <select
+                required={childTypifications.length > 0}
+                disabled={!selectedParent || childTypifications.length === 0}
+                value={childTypificationId}
+                onChange={(event) => setChildTypificationId(event.target.value)}
+              >
+                <option value="">
+                  {selectedParent
+                    ? childTypifications.length
+                      ? "Selecciona una subtipificación"
+                      : "No requiere subtipificación"
+                    : "Selecciona primero una tipificación"}
+                </option>
+                {childTypifications.map((typification) => (
+                  <option key={typification.id} value={typification.id}>
+                    {typification.name}
                   </option>
                 ))}
               </select>
@@ -472,6 +511,7 @@ export function AlertRegister() {
   });
   const [selected, setSelected] = useState<ManagedAlert | null>(null);
   const [managing, setManaging] = useState<ManagedAlert | null>(null);
+  const [clipboardNotice, setClipboardNotice] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [advisors, setAdvisors] = useState<User[]>([]);
   const [typifications, setTypifications] = useState<TypificationTree[]>([]);
@@ -505,19 +545,45 @@ export function AlertRegister() {
       .then(setTypifications)
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    if (!clipboardNotice) return;
+    const timer = window.setTimeout(() => setClipboardNotice(""), 2000);
+    return () => window.clearTimeout(timer);
+  }, [clipboardNotice]);
+  const openManagement = (alert: ManagedAlert) => {
+    const dni = alert.customer_dni?.trim();
+    if (dni && navigator.clipboard) {
+      void navigator.clipboard
+        .writeText(dni)
+        .then(() => setClipboardNotice(`DNI ${dni} copiado al portapapeles.`))
+        .catch(() => setClipboardNotice("No fue posible copiar el DNI al portapapeles."));
+    } else {
+      setClipboardNotice(
+        dni
+          ? "No fue posible copiar el DNI al portapapeles."
+          : "La alerta no tiene DNI registrado.",
+      );
+    }
+    setManaging(alert);
+  };
   return (
     <>
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">GESTIÓN</p>
-          <h1>Registro de alertas</h1>
-          <p>Consulta alertas en seguimiento y alertas cerradas con su trazabilidad completa.</p>
-        </div>
-        <div className="header-metric">
-          <b>{data.total}</b>
-          <span>alertas visibles</span>
-        </div>
-      </div>
+      {clipboardNotice && managing && (
+        <p className="success-message clipboard-toast" role="status">
+          {clipboardNotice}
+        </p>
+      )}
+      <PageHeader
+        eyebrow="GESTIÓN"
+        title="Registro de alertas"
+        description="Consulta alertas en seguimiento y alertas cerradas con su trazabilidad completa."
+        meta={
+          <span className="header-metric">
+            <b>{data.total}</b>
+            <span>alertas visibles</span>
+          </span>
+        }
+      />
       <section className="panel filters">
         <div className="panel-heading">
           <div>
@@ -679,7 +745,16 @@ export function AlertRegister() {
         </form>
         {error && <p className="form-error">{error}</p>}
       </section>
-      <section className="panel register-panel">
+      <DataPanel
+        className="register-panel"
+        title="Bandeja de alertas"
+        description="Revisa el estado operativo y la trazabilidad por cliente."
+        metric={
+          <span className="header-metric">
+            <b>{data.total}</b> registros
+          </span>
+        }
+      >
         <div className="table-wrap">
           <table className="alert-register-table">
             <thead>
@@ -714,14 +789,14 @@ export function AlertRegister() {
                             ? undefined
                             : `Gestionar alerta de ${alert.product_name || "producto"}`
                         }
-                        onClick={closed ? undefined : () => setManaging(alert)}
+                        onClick={closed ? undefined : () => openManagement(alert)}
                         onKeyDown={
                           closed
                             ? undefined
                             : (event) => {
                                 if (event.key === "Enter" || event.key === " ") {
                                   event.preventDefault();
-                                  setManaging(alert);
+                                  openManagement(alert);
                                 }
                               }
                         }
@@ -763,7 +838,9 @@ export function AlertRegister() {
                           </span>
                           <span className="table-detail">
                             {closed
-                              ? closureDetail(alert) || latest?.observation || latest?.note
+                              ? truncateDetail(
+                                  closureDetail(alert) || latest?.observation || latest?.note,
+                                )
                               : `Próxima: ${formatDate(alert.next_action_date)}`}
                           </span>
                         </td>
@@ -792,7 +869,7 @@ export function AlertRegister() {
                                 setSelected(alert);
                               }}
                             >
-                              Ver detalle
+                              Ver
                             </button>
                           </div>
                         </td>
@@ -815,14 +892,18 @@ export function AlertRegister() {
             load(page).catch(() => setError("No fue posible cargar la página."))
           }
         />
-      </section>
+      </DataPanel>
       {selected && <AlertDetails alert={selected} onClose={() => setSelected(null)} />}
       {managing && (
         <AlertManagement
           alert={managing}
           typifications={typifications}
           products={products}
-          onClose={() => setManaging(null)}
+          clipboardNotice={clipboardNotice}
+          onClose={() => {
+            setClipboardNotice("");
+            setManaging(null);
+          }}
           onManaged={() => load(data.page)}
         />
       )}

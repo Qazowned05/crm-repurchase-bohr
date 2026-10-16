@@ -1,15 +1,49 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, setToken } from "../../services/api";
 import type { User } from "../../services/types";
 export function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [backgroundReady, setBackgroundReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const image = new Image();
+    image.src = "/login-background.png";
+    image
+      .decode()
+      .catch(() => {})
+      .finally(() => active && setBackgroundReady(true));
+    return () => {
+      active = false;
+    };
+  }, []);
+  if (!backgroundReady) {
+    return (
+      <main className="login login-loading">
+        <p role="status">Cargando acceso...</p>
+      </main>
+    );
+  }
   return (
     <main className="login">
       <section className="login-card">
-        <header className="login-brand">
-          <img src="/bohr-flow-sin-fondo-ajustado.png" alt="BOHR Flow" />
-        </header>
+        <div className="login-brief">
+          <header className="login-brand">
+            <img src="/bohr-flow-sin-fondo-ajustado.png" alt="BOHR Flow" />
+          </header>
+          <div>
+            <p className="login-kicker">CRM RECOMPRA</p>
+            <h1>Más cerca de cada cliente.</h1>
+            <p>
+              Mantén el contacto, fortalece la relación y convierte cada seguimiento en una venta.
+            </p>
+          </div>
+          <ul className="login-highlights">
+            <li>Prioriza alertas y próximos seguimientos.</li>
+            <li>Conserva la trazabilidad de cada cliente.</li>
+            <li>Fortalece la relación y la recompra.</li>
+          </ul>
+        </div>
         <form
           className="login-form"
           onSubmit={async (e) => {
@@ -34,11 +68,21 @@ export function Login({ onLogin }: { onLogin: (user: User) => void }) {
           </div>
           <label>
             Correo
-            <input name="email" type="email" autoComplete="email" required autoFocus />
+            <span className="login-input-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="2" />
+                <path d="m4 7 8 6 8-6" />
+              </svg>
+              <input name="email" type="email" autoComplete="email" required autoFocus />
+            </span>
           </label>
           <label>
             Contraseña
-            <span className="login-password-field">
+            <span className="login-input-field login-password-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="10" width="16" height="10" rx="2" />
+                <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+              </svg>
               <input
                 name="password"
                 type={showPassword ? "text" : "password"}
@@ -51,7 +95,6 @@ export function Login({ onLogin }: { onLogin: (user: User) => void }) {
                 className="password-visibility"
                 onClick={() => setShowPassword((visible) => !visible)}
                 aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
-                title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   {showPassword ? (

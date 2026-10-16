@@ -3,6 +3,8 @@ import { ConfirmModal } from "../../components/Modal";
 import { CrudModal } from "../../components/CrudModal";
 import { api } from "../../services/api";
 import type { Typification, TypificationTree } from "../../services/types";
+import { DataPanel } from "../../components/DataPanel";
+import { PageHeader } from "../../components/PageHeader";
 
 function flatten(
   nodes: TypificationTree[],
@@ -120,29 +122,27 @@ export function Configuration() {
   ];
   return (
     <>
-      <div className="page-title">
-        <div>
-          <p className="eyebrow">CONFIGURACIÓN</p>
-          <h1>Tipificaciones de contacto</h1>
-          <p>Organiza los resultados de atención en una estructura clara y reutilizable.</p>
-        </div>
-        <button
-          onClick={() => {
-            setError("");
-            setEdit(null);
-          }}
-        >
-          Nueva tipificación
-        </button>
-      </div>
-      <section className="panel tree-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Árbol de tipificaciones</h2>
-            <p>{flat.length} tipificaciones configuradas</p>
-          </div>
-          <span className="legend-dot">Nivel principal</span>
-        </div>
+      <PageHeader
+        eyebrow="CONFIGURACIÓN"
+        title="Tipificaciones de contacto"
+        description="Organiza los resultados de atención en una estructura clara y reutilizable."
+        actions={
+          <button
+            onClick={() => {
+              setError("");
+              setEdit(null);
+            }}
+          >
+            Nueva tipificación
+          </button>
+        }
+      />
+      <DataPanel
+        className="tree-panel"
+        title="Árbol de tipificaciones"
+        description={`${flat.length} tipificaciones configuradas`}
+        actions={<span className="legend-dot">Nivel principal</span>}
+      >
         {error && <p className="form-error">{error}</p>}
         <ul className="typification-tree">
           {tree.map((node) => (
@@ -154,7 +154,7 @@ export function Configuration() {
             Aún no hay tipificaciones. Crea la primera categoría para comenzar.
           </div>
         )}
-      </section>
+      </DataPanel>
       {edit !== undefined && (
         <CrudModal
           title={edit ? "Editar tipificación" : "Nueva tipificación"}
