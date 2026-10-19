@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,7 @@ from app.core.audit import record_audit
 from app.core.database import get_db
 from app.core.pagination import paginated_scalars, paginate_items
 from app.dependencies import get_current_user
-from app.modules.alerts.models import Alert, AlertContactAttempt
+from app.modules.alerts.models import Alert, AlertContactAttempt, AlertNotification
 from app.modules.alerts.schemas import AlertRepurchaseCreate, AlertResponse, ContactAttemptCreate, ContactAttemptResponse, ManagedAlertResponse
 from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, alert_response, contact_attempt_response, ensure_daily_alerts, managed_alert_response
 from app.modules.alerts.service import advisor_visible_alerts_query
@@ -149,6 +149,7 @@ def register_repurchase(
         if customer.condition != previous_condition:
             record_audit(db, actor_id=current_user.id, entity_type="customer", entity_id=customer.id, action="UPDATED", before={"condition": previous_condition}, after={"condition": customer.condition, "source": "repurchase"})
     alert.status = "RECOMPRA_LOGRADA" if source_product_purchased else "COMPRA_OTRO_PRODUCTO"
+    db.execute(delete(AlertNotification).where(AlertNotification.alert_id == alert.id))
     managed_at = datetime.now(timezone.utc)
     alert.closed_at = managed_at
     alert.last_contact_at = managed_at
@@ -292,6 +293,70 @@ def upcoming_alerts(
     return sorted(upcoming, key=lambda alert: (alert["alert_date"], alert["customer_name"]))[:limit]
 
 
+@router.get("/upcoming-actions", response_model=list[ManagedAlertResponse])
+def upcoming_actions(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    query = active_alerts_query().where(
+        Alert.next_action_at >= now,
+        Alert.next_action_at <= now + timedelta(minutes=5),
+    )
+    if current_user.role == "ASESOR":
+        query = query.where(Alert.assigned_advisor_id == current_user.id)
+    return [managed_alert_response(alert, db) for alert in db.scalars(query.order_by(Alert.next_action_at))]
+
+
+@router.get("/notifications")
+def list_notifications(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict]:
+    if current_user.role in {"SUPERVISOR", "ADMIN"}:
+        generated_schedules = db.execute(
+            select(AlertNotification.alert_id, AlertNotification.scheduled_for)
+            .join(Alert, Alert.id == AlertNotification.alert_id)
+            .where(Alert.status.not_in(FINAL_STATUSES))
+            .distinct()
+        ).all()
+        for alert_id, scheduled_for in generated_schedules:
+            exists = db.scalar(select(AlertNotification.id).where(
+                AlertNotification.alert_id == alert_id,
+                AlertNotification.user_id == current_user.id,
+                AlertNotification.scheduled_for == scheduled_for,
+            ))
+            if exists is None:
+                db.add(AlertNotification(
+                    alert_id=alert_id,
+                    user_id=current_user.id,
+                    scheduled_for=scheduled_for,
+                ))
+        db.commit()
+    notifications = db.scalars(
+        select(AlertNotification)
+        .where(AlertNotification.user_id == current_user.id, AlertNotification.dismissed_at.is_(None))
+        .order_by(AlertNotification.created_at.desc())
+    )
+    result = []
+    for notification in notifications:
+        alert = db.get(Alert, notification.alert_id)
+        if alert is None:
+            continue
+        result.append({
+            "id": notification.id,
+            "alert_id": alert.id,
+            "scheduled_for": notification.scheduled_for,
+            "created_at": notification.created_at,
+            "alert": alert_response(alert, db),
+        })
+    return result
+
+
+@router.delete("/notifications/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_notification(notification_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Response:
+    notification = db.get(AlertNotification, notification_id)
+    if notification is None or notification.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notification.dismissed_at = datetime.now(timezone.utc)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/{alert_id}", response_model=AlertResponse)
 def get_alert(alert_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     alert = alert_or_404(alert_id, db)
@@ -332,20 +397,23 @@ def add_attempt(alert_id: str, payload: ContactAttemptCreate, current_user: User
     requires_next_action = result in {"AUN_TIENE_PRODUCTO", "SOLICITA_SEGUIMIENTO", "SIN_RESPUESTA"} or (typification and typification.requires_next_action)
     requires_note = result == "OTRO" or (typification and typification.requires_note)
     requires_close = bool(typification and typification.requires_close)
-    if requires_next_action and payload.next_action_date is None:
-        raise HTTPException(status_code=422, detail="A next action date is required for this result")
+    next_action_date = payload.next_action_date or (payload.next_action_at.date() if payload.next_action_at else None)
+    if requires_next_action and next_action_date is None:
+        raise HTTPException(status_code=422, detail="A next action date and time are required for this result")
     if requires_note and not (payload.note or "").strip():
         raise HTTPException(status_code=422, detail="A descriptive note is required for this result")
-    if result == "OTRO" and not payload.close_alert and payload.next_action_date is None:
+    if result == "OTRO" and not payload.close_alert and next_action_date is None:
         raise HTTPException(status_code=422, detail="OTRO requires a next action date or close_alert")
     if result == "RECOMPRA_REGISTRADA":
         raise HTTPException(status_code=422, detail="RECOMPRA_REGISTRADA requires recording a confirmed sale")
     attempt = AlertContactAttempt(alert_id=alert.id, advisor_id=current_user.id, channel=payload.channel.strip().upper(), result=result, typification_id=typification.id if typification else None,
-                                  note=payload.note.strip() if payload.note else None, next_action_date=payload.next_action_date)
+                                  note=payload.note.strip() if payload.note else None, next_action_date=next_action_date, next_action_at=payload.next_action_at)
     db.add(attempt)
     alert.attempts_count += 1
     alert.last_contact_at = datetime.now(timezone.utc)
-    alert.next_action_date = payload.next_action_date
+    alert.next_action_date = next_action_date
+    alert.next_action_at = payload.next_action_at
+    db.execute(delete(AlertNotification).where(AlertNotification.alert_id == alert.id))
     if result in {"AUN_TIENE_PRODUCTO", "SOLICITA_SEGUIMIENTO"} or (typification and typification.requires_next_action):
         alert.status = "REPROGRAMADO"
     elif result == "SIN_RESPUESTA":
@@ -361,6 +429,6 @@ def add_attempt(alert_id: str, payload: ContactAttemptCreate, current_user: User
     elif payload.close_alert:
         alert.status, alert.closed_at = "CANCELADO_POR_RECOMPRA", datetime.now(timezone.utc)
         alert.closure_reason = "CIERRE_MANUAL"
-    record_audit(db, actor_id=current_user.id, entity_type="alert", entity_id=alert.id, action="CONTACT_ATTEMPT", after={"result": result, "status": alert.status, "next_action_date": str(alert.next_action_date) if alert.next_action_date else None})
+    record_audit(db, actor_id=current_user.id, entity_type="alert", entity_id=alert.id, action="CONTACT_ATTEMPT", after={"result": result, "status": alert.status, "next_action_date": str(alert.next_action_date) if alert.next_action_date else None, "next_action_at": alert.next_action_at.isoformat() if alert.next_action_at else None})
     db.commit()
     return alert_response(alert, db)

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import record_audit
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.modules.alerts.models import Alert, AlertContactAttempt
+from app.modules.alerts.models import Alert, AlertContactAttempt, AlertNotification
 from app.modules.configuration.models import ContactTypification
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
@@ -73,7 +73,7 @@ def contact_attempt_response(attempt: AlertContactAttempt, db: Session) -> dict:
     parent = db.get(ContactTypification, typification.parent_id) if typification and typification.parent_id else None
     advisor = db.get(User, attempt.advisor_id)
     return {
-        **{column.name: getattr(attempt, column.name) for column in AlertContactAttempt.__table__.columns if column.name != "typification_id"},
+        **{column.name: getattr(attempt, column.name) for column in AlertContactAttempt.__table__.columns if column.name not in {"typification_id", "next_action_at"}},
         "observation": attempt.note,
         "user_name": advisor.full_name if advisor else None,
         # A root typification is the parent classification; a descendant is the child classification.
@@ -219,10 +219,44 @@ def ensure_daily_alerts(db: Session) -> None:
     _last_generation_marker = marker
 
 
+def generate_due_alert_notifications(db: Session) -> int:
+    now = datetime.now(timezone.utc)
+    alerts = db.scalars(
+        active_alerts_query().where(
+            Alert.assigned_advisor_id.is_not(None),
+            Alert.next_action_at >= now,
+            Alert.next_action_at <= now + timedelta(minutes=5),
+        )
+    )
+    monitoring_user_ids = set(db.scalars(select(User.id).where(
+        User.is_active.is_(True),
+        User.role.in_({"SUPERVISOR", "ADMIN"}),
+    )))
+    created = 0
+    for alert in alerts:
+        recipient_ids = monitoring_user_ids | {alert.assigned_advisor_id}
+        for user_id in recipient_ids:
+            exists = db.scalar(select(AlertNotification.id).where(
+                AlertNotification.alert_id == alert.id,
+                AlertNotification.user_id == user_id,
+                AlertNotification.scheduled_for == alert.next_action_at,
+            ))
+            if exists is None:
+                db.add(AlertNotification(
+                    alert_id=alert.id,
+                    user_id=user_id,
+                    scheduled_for=alert.next_action_at,
+                ))
+                created += 1
+    return created
+
+
 def _run_scheduled_generation() -> None:
     db = SessionLocal()
     try:
         ensure_daily_alerts(db)
+        generate_due_alert_notifications(db)
+        db.commit()
     except Exception:
         logger.exception("Automatic alert generation failed")
     finally:

@@ -78,6 +78,7 @@ export type Alert = {
   status: string;
   attempts_count: number;
   next_action_date?: string | null;
+  next_action_at?: string | null;
   customer_id?: string | null;
   customer_dni?: string | null;
   customer_first_names?: string | null;
@@ -109,6 +110,54 @@ export type UpcomingAlert = {
   product_name: string;
   product_code: string;
 };
+export type AlertNotification = {
+  id: string;
+  alert_id: string;
+  scheduled_for: string;
+  created_at: string;
+  alert: Alert;
+};
+export type LeadStatus =
+  "PENDIENTE" | "AGENDADO" | "CERRADO_EFECTIVO" | "RECUPERABLE";
+export type Lead = {
+  id: string;
+  full_name: string;
+  phone: string;
+  email?: string | null;
+  source: "REDES_SOCIALES" | "COMERCIAL_TV" | "REFERIDO";
+  initial_product_id?: string | null;
+  notes?: string | null;
+  status: LeadStatus;
+  reassigned_from_recovery: boolean;
+  reassigned_at?: string | null;
+  assigned_advisor_id?: string | null;
+  assigned_advisor_name?: string | null;
+  next_action_date?: string | null;
+  next_action_at?: string | null;
+  converted_customer_id?: string | null;
+  converted_sale_id?: string | null;
+  latest_typification_name?: string | null;
+  created_at: string;
+};
+export type LeadActivity = {
+  id: string;
+  advisor_id: string;
+  advisor_name?: string | null;
+  typification_id: string;
+  typification_name?: string | null;
+  channel: "LLAMADA" | "WHATSAPP";
+  note?: string | null;
+  next_action_date?: string | null;
+  next_action_at?: string | null;
+  created_at: string;
+};
+export type LeadNotification = {
+  id: string;
+  lead_id: string;
+  scheduled_for: string;
+  created_at: string;
+  lead: Lead;
+};
 export type ContactAttempt = {
   id: string;
   alert_id: string;
@@ -118,6 +167,7 @@ export type ContactAttempt = {
   result: string;
   note?: string | null;
   next_action_date?: string | null;
+  next_action_at?: string | null;
   observation?: string | null;
   user_name?: string | null;
   parent_typification_name?: string | null;
@@ -138,6 +188,7 @@ export type Typification = {
   requires_next_action: boolean;
   requires_note: boolean;
   requires_close: boolean;
+  lead_outcome?: "PENDIENTE" | "AGENDADO" | "RECUPERABLE" | "EFECTIVO" | null;
 };
 export type TypificationTree = Typification & { children: TypificationTree[] };
 export type RecoveryAlert = Alert & {

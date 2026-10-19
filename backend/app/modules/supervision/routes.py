@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from math import ceil
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, delete, desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -22,6 +22,7 @@ from app.modules.supervision.models import AlertAssignmentHistory, CustomerAssig
 from app.modules.supervision.schemas import (
     AlertAssignmentHistoryResponse,
     AssignmentCreate,
+    BulkAlertDelete,
     BulkAssignmentCreate,
     CustomerAssignmentHistoryResponse,
     RecoveryCustomerResponse,
@@ -65,7 +66,22 @@ def record_alert_assignment(alert: Alert, advisor_id: str | None, reason: str, a
         reason=reason, assigned_by_user_id=actor_id,
     ))
     record_audit(db, actor_id=actor_id, entity_type="alert", entity_id=alert.id, action="ASSIGNED",
-                 before={"assigned_advisor_id": previous}, after={"assigned_advisor_id": advisor_id, "reason": reason})
+                  before={"assigned_advisor_id": previous}, after={"assigned_advisor_id": advisor_id, "reason": reason})
+
+
+def delete_recovery_alerts(alerts: list[Alert], current_user: User, db: Session) -> None:
+    alert_ids = [alert.id for alert in alerts]
+    db.execute(update(Sale).where(Sale.source_alert_id.in_(alert_ids)).values(source_alert_id=None))
+    for alert in alerts:
+        record_audit(
+            db,
+            actor_id=current_user.id,
+            entity_type="alert",
+            entity_id=alert.id,
+            action="DELETED_FROM_RECOVERY",
+            before={"status": alert.status, "closure_reason": alert.closure_reason},
+        )
+        db.delete(alert)
 
 
 @router.post("/customers/{customer_id}/transfer")
@@ -260,6 +276,39 @@ def bulk_assign_recovery_alerts(
         alert.status, alert.closed_at = "REASIGNADO", None
     db.commit()
     return {"assigned_advisor_id": payload.assigned_advisor_id, "assigned_alert_ids": payload.alert_ids, "count": len(alerts)}
+
+
+@router.delete("/alerts/{alert_id}", status_code=204)
+def delete_recovery_alert(
+    alert_id: str,
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")),
+    db: Session = Depends(get_db),
+) -> None:
+    alert = alert_or_404(alert_id, db)
+    recoverable = db.scalar(recovery_alerts_query(db).where(Alert.id == alert.id).with_only_columns(Alert.id))
+    if recoverable is None:
+        raise HTTPException(status_code=409, detail="Only alerts currently in the recovery scope can be deleted")
+    delete_recovery_alerts([alert], current_user, db)
+    db.commit()
+
+
+@router.post("/alerts/bulk-delete")
+def bulk_delete_recovery_alerts(
+    payload: BulkAlertDelete,
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")),
+    db: Session = Depends(get_db),
+) -> dict:
+    if len(set(payload.alert_ids)) != len(payload.alert_ids):
+        raise HTTPException(status_code=422, detail="alert_ids must not contain duplicates")
+    alerts = list(db.scalars(select(Alert).where(Alert.id.in_(payload.alert_ids)).with_for_update()))
+    if len(alerts) != len(payload.alert_ids):
+        raise HTTPException(status_code=404, detail="One or more alerts were not found")
+    recoverable_ids = set(db.scalars(recovery_alerts_query(db).where(Alert.id.in_(payload.alert_ids)).with_only_columns(Alert.id)))
+    if recoverable_ids != set(payload.alert_ids):
+        raise HTTPException(status_code=409, detail="Only alerts currently in the recovery scope can be deleted")
+    delete_recovery_alerts(alerts, current_user, db)
+    db.commit()
+    return {"deleted_alert_ids": payload.alert_ids, "count": len(alerts)}
 
 
 @router.get("/alerts/{alert_id}/assignment-history", response_model=None)

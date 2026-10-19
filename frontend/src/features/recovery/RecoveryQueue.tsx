@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CrudModal } from "../../components/CrudModal";
+import { ConfirmModal } from "../../components/Modal";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { SearchSelect } from "../../components/SearchSelect";
 import { api, listAll } from "../../services/api";
@@ -43,6 +44,8 @@ export function RecoveryQueue() {
   const [products, setProducts] = useState<Product[]>([]);
   const [selected, setSelected] = useState<RecoveryAlert | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState<RecoveryAlert | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState({
     typification_id: "",
@@ -285,6 +288,9 @@ export function RecoveryQueue() {
             <button disabled={!selectedIds.size} onClick={() => setBulkOpen(true)}>
               Asignar {selectedIds.size} seleccionadas
             </button>
+            <button className="danger" disabled={!selectedIds.size} onClick={() => setBulkDeleteOpen(true)}>
+              Eliminar {selectedIds.size} seleccionadas
+            </button>
           </div>
         }
       >
@@ -348,9 +354,14 @@ export function RecoveryQueue() {
                   <td>{row.latest_contact_typification || "Sin gestión"}</td>
                   <td>{row.assigned_advisor_name || "Sin asignar"}</td>
                   <td>
-                    <button className="secondary" onClick={() => setSelected(row)}>
-                      Reasignar
-                    </button>
+                    <div className="recovery-row-actions">
+                      <button className="secondary" onClick={() => setSelected(row)}>
+                        Reasignar
+                      </button>
+                      <button className="danger" onClick={() => setDeleting(row)}>
+                        Eliminar
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -421,6 +432,31 @@ export function RecoveryQueue() {
               body: JSON.stringify({ ...form, alert_ids: [...selectedIds] }),
             });
             setBulkOpen(false);
+            await load();
+          }}
+        />
+      )}
+      {deleting && (
+        <ConfirmModal
+          title="Eliminar alerta de recuperación"
+          message={`Eliminarás permanentemente la alerta de ${deleting.product_name}. Esta acción no se puede deshacer.`}
+          onClose={() => setDeleting(null)}
+          onConfirm={async () => {
+            await api(`/supervision/alerts/${deleting.id}`, { method: "DELETE" });
+            await load();
+          }}
+        />
+      )}
+      {bulkDeleteOpen && (
+        <ConfirmModal
+          title={`Eliminar ${selectedIds.size} alertas`}
+          message="Eliminarás permanentemente las alertas seleccionadas de la cola de recuperación. Esta acción no se puede deshacer."
+          onClose={() => setBulkDeleteOpen(false)}
+          onConfirm={async () => {
+            await api("/supervision/alerts/bulk-delete", {
+              method: "POST",
+              body: JSON.stringify({ alert_ids: [...selectedIds] }),
+            });
             await load();
           }}
         />

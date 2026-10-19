@@ -12,6 +12,7 @@ from app.modules.products.models import Product, ProductRepurchaseRule
 from app.modules.sales.models import Sale, SaleDuplicateReview, SaleItem
 from app.modules.alerts.models import Alert, AlertContactAttempt
 from app.modules.configuration.models import AlertOperationalSettings, ContactTypification
+from app.modules.leads.models import Lead, LeadActivity, LeadAssignmentHistory, LeadNotification
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

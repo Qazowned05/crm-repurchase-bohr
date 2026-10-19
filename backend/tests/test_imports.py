@@ -11,6 +11,7 @@ from app.modules.imports.models import ImportJob, ImportRowError
 from app.modules.products.models import Product, ProductRepurchaseRule
 from app.modules.sales.models import Sale, SaleItem
 from app.modules.imports.routes import excel_safe
+from app.modules.leads.models import Lead
 
 
 def make_user(db: Session, email: str, role: str) -> User:
@@ -42,6 +43,7 @@ CUSTOMER_HEADERS = ["dni", "first_names", "last_names", "phone", "email", "birth
 BUSINESS_CUSTOMER_HEADERS = ["customer_type", "dni", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"]
 PRODUCT_HEADERS = ["code", "name", "brand", "category", "unit_price", "is_active", "duration_days", "alert_days", "effective_from"]
 HISTORICAL_SALES_HEADERS = ["numero_venta", "customer_dni", "sale_date", "advisor_email", "channel", "channel_detail", "product_code", "quantity", "notes", "historical_unit_price"]
+LEAD_HEADERS = ["full_name", "phone", "source", "email", "initial_product_code", "notes", "assigned_advisor_email"]
 
 
 def preview(client: TestClient, headers: dict[str, str], import_type: str, content: bytes, **data: str) -> dict:
@@ -94,6 +96,21 @@ def test_clean_import_commits_customers_and_versioned_product_rule(client: TestC
     assert client.post(f"/api/v1/imports/{product_job['id']}/commit", headers=headers).status_code == 200
     assert db.query(Product).count() == 1
     assert db.query(ProductRepurchaseRule).count() == 1
+
+
+def test_lead_import_assigns_pending_leads_by_advisor_email(client: TestClient, db: Session) -> None:
+    supervisor = make_user(db, "lead-import-supervisor@example.com", "SUPERVISOR")
+    advisor = make_user(db, "lead-import-advisor@example.com", "ASESOR")
+    headers = auth(client, supervisor.email)
+    assert client.get("/api/v1/imports/templates/leads", headers=headers).status_code == 200
+    job = preview(client, headers, "leads", workbook(LEAD_HEADERS, [[
+        "Lead de campaña", "999999999", "REDES_SOCIALES", "lead@example.com", "", "Campaña semanal", advisor.email,
+    ]]))
+    assert job["state"] == "PREVIEW_READY"
+    assert client.post(f"/api/v1/imports/{job['id']}/commit", headers=headers).status_code == 200
+    lead = db.query(Lead).one()
+    assert lead.status == "PENDIENTE"
+    assert lead.assigned_advisor_id == advisor.id
 
 
 def test_product_import_rejects_unknown_catalog_values(client: TestClient, db: Session) -> None:

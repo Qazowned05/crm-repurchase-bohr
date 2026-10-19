@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { clearToken, api } from "../services/api";
-import type { User } from "../services/types";
+import type { AlertNotification, LeadNotification, User } from "../services/types";
 import { Login } from "../features/auth/Login";
 import { Dashboard } from "../features/dashboard/Dashboard";
 import { RecoveryQueue } from "../features/recovery/RecoveryQueue";
@@ -10,6 +10,8 @@ import { Configuration } from "../features/configuration/Configuration";
 import { Sales } from "../features/sales/Sales";
 import { AlertRegister } from "../features/alerts/AlertRegister";
 import { Operations } from "../features/operations/Operations";
+import { Leads } from "../features/leads/Leads";
+import { LeadRecoveryQueue } from "../features/leads/LeadRecoveryQueue";
 type View =
   | "dashboard"
   | "sales"
@@ -19,7 +21,16 @@ type View =
   | "products"
   | "users"
   | "configuration"
-  | "operations";
+  | "operations"
+  | "leads"
+  | "lead-recovery";
+type NotificationItem =
+  | { kind: "ALERT"; value: AlertNotification }
+  | { kind: "LEAD"; value: LeadNotification };
+
+function notificationDate(value: string) {
+  return new Intl.DateTimeFormat("es-PE", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
 
 function NavIcon({ view }: { view: View }) {
   const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.8 };
@@ -39,6 +50,14 @@ function NavIcon({ view }: { view: View }) {
         <path d="m7 15 4-4 3 2 5-6" />
       </svg>
     );
+  if (view === "leads")
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3 20c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5" />
+        <path d="M17 9h4M19 7v4" />
+      </svg>
+    );
   if (view === "alert-register")
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
@@ -46,7 +65,7 @@ function NavIcon({ view }: { view: View }) {
         <path d="M10 21h4" />
       </svg>
     );
-  if (view === "recovery")
+  if (view === "recovery" || view === "lead-recovery")
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" {...common}>
         <path d="M20 11a8 8 0 1 0 2 5" />
@@ -96,9 +115,15 @@ export function App() {
   const [ready, setReady] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [closedAlertReminderIds, setClosedAlertReminderIds] = useState<Set<string>>(new Set());
+  const [alertToManageId, setAlertToManageId] = useState<string | null>(null);
+  const notificationsMenuRef = useRef<HTMLDivElement>(null);
   const [openNavGroups, setOpenNavGroups] = useState<Record<string, boolean>>({
     Principal: true,
-    Operación: true,
+    Recompra: true,
+    Seguimiento: true,
     Administración: true,
   });
   const location = useLocation();
@@ -109,6 +134,29 @@ export function App() {
       .catch(clearToken)
       .finally(() => setReady(true));
   }, []);
+  useEffect(() => {
+    if (!user) return;
+    const loadNotifications = () => Promise.all([
+      api<AlertNotification[]>("/alerts/notifications"),
+      api<LeadNotification[]>("/leads/notifications"),
+    ]).then(([alerts, leads]) => setNotifications([
+      ...alerts.map((value) => ({ kind: "ALERT" as const, value })),
+      ...leads.map((value) => ({ kind: "LEAD" as const, value })),
+    ])).catch(() => {});
+    void loadNotifications();
+    const timer = window.setInterval(() => void loadNotifications(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [user?.id]);
+  useEffect(() => setClosedAlertReminderIds(new Set()), [user?.id]);
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!notificationsMenuRef.current?.contains(event.target as Node)) setNotificationsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [notificationsOpen]);
+  const handleAlertOpened = useCallback(() => setAlertToManageId(null), []);
   if (!ready) return <main className="loading">Cargando CRM...</main>;
   if (!user)
     return (
@@ -120,6 +168,11 @@ export function App() {
       />
     );
   const supervisor = user.role !== "ASESOR";
+  const alertReminders = user.role === "ASESOR"
+    ? notifications.filter((notification): notification is Extract<NotificationItem, { kind: "ALERT" }> =>
+      notification.kind === "ALERT" && !closedAlertReminderIds.has(notification.value.id))
+    : [];
+  const currentAlertReminder = alertReminders[0];
   const viewLabels: Record<View, string> = {
     dashboard: "Resumen",
     sales: "Ventas",
@@ -130,6 +183,8 @@ export function App() {
     users: "Usuarios",
     configuration: "Tipificaciones",
     operations: "Operaciones",
+    leads: "Leads",
+    "lead-recovery": "Leads recuperables",
   };
   const viewPaths: Record<View, string> = {
     dashboard: "/",
@@ -141,6 +196,8 @@ export function App() {
     users: "/usuarios",
     configuration: "/tipificaciones",
     operations: "/operaciones",
+    leads: "/leads",
+    "lead-recovery": "/leads-recuperables",
   };
   const pathToView = Object.fromEntries(
     Object.entries(viewPaths).map(([viewId, path]) => [path, viewId]),
@@ -150,7 +207,7 @@ export function App() {
   const navGroups: Array<{ label: string; items: Array<[View, string]> }> = [
     { label: "Principal", items: [["dashboard", "Resumen"]] },
     {
-      label: "Operación",
+      label: "Recompra",
       items: [
         ["sales", "Ventas"],
         ["alert-register", "Registro de alertas"],
@@ -161,6 +218,13 @@ export function App() {
             ]
           : []),
       ] as Array<[View, string]>,
+    },
+    {
+      label: "Seguimiento",
+      items: [
+        ["leads", "Leads"],
+        ...(supervisor ? [["lead-recovery", "Leads recuperables"] as [View, string]] : []),
+      ],
     },
   ];
   if (supervisor) {
@@ -176,9 +240,13 @@ export function App() {
   }
   const renderView = (activeView: View) =>
     activeView === "dashboard" ? (
-      <Dashboard user={user} />
+      <Dashboard user={user} alertToManageId={alertToManageId} onAlertOpened={handleAlertOpened} />
     ) : activeView === "sales" ? (
       <Sales user={user} />
+    ) : activeView === "leads" ? (
+      <Leads user={user} />
+    ) : activeView === "lead-recovery" ? (
+      supervisor ? <LeadRecoveryQueue user={user} /> : <Dashboard user={user} />
     ) : activeView === "alert-register" ? (
       <AlertRegister />
     ) : activeView === "recovery" ? (
@@ -199,7 +267,7 @@ export function App() {
   };
   if (
     !supervisor &&
-    ["recovery", "customers", "products", "configuration", "operations", "users"].includes(view)
+    ["recovery", "lead-recovery", "customers", "products", "configuration", "operations", "users"].includes(view)
   )
     return <Navigate to="/" replace />;
   if (user.role !== "ADMIN" && view === "users") return <Navigate to="/" replace />;
@@ -264,7 +332,9 @@ export function App() {
               <small>{user.role}</small>
             </span>
             <span className="profile-disclosure" aria-hidden="true">
-              {profileMenuOpen ? "-" : "+"}
+              <svg viewBox="0 0 24 24">
+                <path d="m7 10 5 5 5-5" />
+              </svg>
             </span>
           </button>
           {profileMenuOpen && (
@@ -277,6 +347,10 @@ export function App() {
                   routerNavigate("/", { replace: true });
                 }}
               >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10 5H5v14h5" />
+                  <path d="m14 8 4 4-4 4M18 12H9" />
+                </svg>
                 Cerrar sesión
               </button>
             </div>
@@ -291,6 +365,76 @@ export function App() {
           </div>
           <div className="app-header-actions">
             <span className="app-role">{user.role}</span>
+            <div className="notifications-menu" ref={notificationsMenuRef}>
+              <button
+                type="button"
+                className="notifications-trigger"
+                onClick={() => setNotificationsOpen((open) => !open)}
+                aria-label="Abrir notificaciones"
+                aria-expanded={notificationsOpen}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                  <path d="M10 21h4" />
+                </svg>
+                {notifications.length > 0 && <span>{notifications.length}</span>}
+              </button>
+              {notificationsOpen && (
+                <section className="notifications-panel" aria-label="Notificaciones">
+                  <header>
+                    <div>
+                      <p>RECORDATORIOS</p>
+                      <strong>Notificaciones</strong>
+                    </div>
+                    <small>{notifications.length ? `${notifications.length} pendientes` : "Sin pendientes"}</small>
+                  </header>
+                  {notifications.map((notification) => (
+                    <article key={`${notification.kind}-${notification.value.id}`}>
+                      <span className="notification-mark" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+                          <path d="M10 21h4" />
+                        </svg>
+                      </span>
+                      <button
+                        type="button"
+                        className="notification-entry"
+                        onClick={() => {
+                          setNotificationsOpen(false);
+                          if (notification.kind === "ALERT") {
+                            setAlertToManageId(notification.value.alert_id);
+                            routerNavigate("/");
+                          } else routerNavigate("/leads");
+                        }}
+                      >
+                        <b>Acción programada</b>
+                        <span>
+                          {notification.kind === "LEAD"
+                            ? user.role === "ASESOR"
+                              ? `Gestiona el lead de ${notification.value.lead.full_name}.`
+                              : `Lead asignado a ${notification.value.lead.assigned_advisor_name || "asesor sin asignar"}: ${notification.value.lead.full_name}.`
+                            : user.role === "ASESOR"
+                              ? `Gestiona la alerta de ${notification.value.alert.customer_first_names || "este cliente"}.`
+                              : `Asignada a ${notification.value.alert.assigned_advisor_name || "asesor sin asignar"}: ${notification.value.alert.customer_first_names || "cliente sin nombre"}.`}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="notification-dismiss"
+                        aria-label="Eliminar notificación"
+                        onClick={() => {
+                          api<void>(notification.kind === "LEAD" ? `/leads/notifications/${notification.value.id}` : `/alerts/notifications/${notification.value.id}`, { method: "DELETE" })
+                            .then(() => setNotifications((items) => items.filter((item) => item.value.id !== notification.value.id || item.kind !== notification.kind)))
+                            .catch(() => {});
+                        }}
+                      >
+                        ×
+                      </button>
+                    </article>
+                  ))}
+                </section>
+              )}
+            </div>
             <button
               type="button"
               className="sidebar-toggle"
@@ -301,6 +445,35 @@ export function App() {
             </button>
           </div>
         </header>
+        {currentAlertReminder && (
+          <div className="scheduled-alert-reminders" role="alert" aria-label="Agendamientos pendientes">
+            <article>
+              <div>
+                <p>{alertReminders.length} AGENDAMIENTO{alertReminders.length === 1 ? "" : "S"} PENDIENTE{alertReminders.length === 1 ? "" : "S"}</p>
+                <strong>{currentAlertReminder.value.alert.customer_first_names || "Cliente sin nombre"}</strong>
+                <span>Próximo: {notificationDate(currentAlertReminder.value.scheduled_for)}</span>
+              </div>
+              <button
+                type="button"
+                className="scheduled-alert-open"
+                onClick={() => {
+                  setAlertToManageId(currentAlertReminder.value.alert_id);
+                  routerNavigate("/");
+                }}
+              >
+                Gestionar
+              </button>
+              <button
+                type="button"
+                className="scheduled-alert-close"
+                aria-label="Cerrar aviso de agendamientos"
+                onClick={() => setClosedAlertReminderIds(new Set(alertReminders.map((notification) => notification.value.id)))}
+              >
+                Cerrar
+              </button>
+            </article>
+          </div>
+        )}
         <section key={view}>{renderView(view)}</section>
       </main>
     </div>

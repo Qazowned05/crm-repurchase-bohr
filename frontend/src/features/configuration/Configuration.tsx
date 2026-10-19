@@ -17,6 +17,7 @@ function rules(node: Typification): string[] {
     node.requires_next_action ? "Seguimiento" : null,
     node.requires_note ? "Nota" : null,
     node.requires_close ? "Cierre" : null,
+    node.lead_outcome ? `Lead: ${node.lead_outcome.replaceAll("_", " ")}` : null,
   ].filter((rule): rule is string => rule !== null);
 }
 function TreeNode({
@@ -118,6 +119,18 @@ export function Configuration() {
       name: "requires_close",
       label: "Cierra la alerta automáticamente",
       type: "checkbox",
+    },
+    {
+      name: "lead_outcome",
+      label: "Resultado para leads",
+      emptyAsNull: true,
+      options: [
+        { value: "", label: "Sin resultado" },
+        { value: "PENDIENTE", label: "Pendiente" },
+        { value: "AGENDADO", label: "Agendado" },
+        { value: "RECUPERABLE", label: "Recuperable" },
+        { value: "EFECTIVO", label: "Efectivo" },
+      ],
     },
   ];
   return (

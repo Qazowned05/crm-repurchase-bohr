@@ -19,6 +19,7 @@ class Alert(Base):
     status: Mapped[str] = mapped_column(String(40), default="PENDIENTE", index=True)
     attempts_count: Mapped[int] = mapped_column(Integer, default=0)
     next_action_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -38,3 +39,16 @@ class AlertContactAttempt(Base):
     typification_id: Mapped[str | None] = mapped_column(ForeignKey("contact_typifications.id", ondelete="RESTRICT"), nullable=True, index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_action_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AlertNotification(Base):
+    __tablename__ = "alert_notifications"
+    __table_args__ = (UniqueConstraint("alert_id", "user_id", "scheduled_for", name="uq_alert_notifications_schedule"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    alert_id: Mapped[str] = mapped_column(ForeignKey("alerts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

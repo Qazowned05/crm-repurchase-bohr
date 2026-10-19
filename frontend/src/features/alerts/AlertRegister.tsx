@@ -232,6 +232,8 @@ function AlertManagement({
               });
             } else {
               if (!selectedTypification) throw new Error("Selecciona una tipificación.");
+              const nextActionDate = String(form.get("next_action_date") || "") || undefined;
+              const nextActionTime = String(form.get("next_action_time") || "") || undefined;
               await api(`/alerts/${alert.id}/attempts`, {
                 method: "POST",
                 body: JSON.stringify({
@@ -239,7 +241,10 @@ function AlertManagement({
                   result: selectedTypification.code,
                   typification_id: selectedTypification.id,
                   note: form.get("note") || undefined,
-                  next_action_date: form.get("next_action_date") || undefined,
+                  next_action_date: nextActionDate,
+                  next_action_at: nextActionDate && nextActionTime
+                    ? new Date(`${nextActionDate}T${nextActionTime}`).toISOString()
+                    : undefined,
                 }),
               });
             }
@@ -322,10 +327,18 @@ function AlertManagement({
                 <option value="OTRO">Otro</option>
               </select>
             </label>
-            <label>
-              Próxima acción
-              <input name="next_action_date" type="date" />
-            </label>
+            {selectedTypification?.requires_next_action && (
+              <>
+                <label>
+                  Próxima acción
+                  <input name="next_action_date" type="date" required />
+                </label>
+                <label>
+                  Hora de recordatorio
+                  <input name="next_action_time" type="time" required />
+                </label>
+              </>
+            )}
             <label className="notes">
               Nota
               <textarea name="note" maxLength={4000} />

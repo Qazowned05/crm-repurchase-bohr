@@ -18,6 +18,7 @@ class ContactTypification(Base):
     requires_next_action: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_note: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_close: Mapped[bool] = mapped_column(Boolean, default=False)
+    lead_outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

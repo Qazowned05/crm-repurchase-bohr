@@ -42,6 +42,7 @@ def contact_typification_tree(page: int | None = Query(default=None, ge=1), page
         record.id: {"id": record.id, "parent_id": record.parent_id, "code": record.code, "name": record.name,
                     "is_active": record.is_active, "requires_next_action": record.requires_next_action,
                     "requires_note": record.requires_note, "requires_close": record.requires_close,
+                    "lead_outcome": record.lead_outcome,
                     "created_at": record.created_at, "updated_at": record.updated_at, "children": []}
         for record in db.scalars(select(ContactTypification).order_by(ContactTypification.code))
     }

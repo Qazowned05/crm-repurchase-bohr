@@ -14,6 +14,7 @@ export type Field = {
   pattern?: string;
   disabled?: boolean;
   helpText?: string;
+  emptyAsNull?: boolean;
 };
 export function CrudModal({
   title,
@@ -58,6 +59,9 @@ export function CrudModal({
             .forEach(
               (f) => (data[f.name] = (form.elements.namedItem(f.name) as HTMLInputElement).checked),
             );
+          fields
+            .filter((f) => f.emptyAsNull && data[f.name] === "")
+            .forEach((f) => (data[f.name] = null));
           fields
             .filter((f) => !f.required && f.type !== "checkbox" && data[f.name] === "")
             .forEach((f) => delete data[f.name]);

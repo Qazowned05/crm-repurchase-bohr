@@ -6,6 +6,7 @@ __pycache__/
 vite.config.js
 vite.config.d.ts
 .pytest_cache/
+.firebase/
 node_modules/
 dist/
 coverage/

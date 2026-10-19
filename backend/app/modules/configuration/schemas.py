@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -11,6 +12,7 @@ class ContactTypificationCreate(BaseModel):
     requires_next_action: bool = False
     requires_note: bool = False
     requires_close: bool = Field(default=False, description="Closing typification: using it closes the managed alert.")
+    lead_outcome: Literal["PENDIENTE", "AGENDADO", "RECUPERABLE", "EFECTIVO"] | None = None
 
     @field_validator("code")
     @classmethod
@@ -36,6 +38,7 @@ class ContactTypificationUpdate(BaseModel):
     requires_next_action: bool | None = None
     requires_note: bool | None = None
     requires_close: bool | None = Field(default=None, description="Closing typification: using it closes the managed alert.")
+    lead_outcome: Literal["PENDIENTE", "AGENDADO", "RECUPERABLE", "EFECTIVO"] | None = None
 
     @field_validator("name")
     @classmethod

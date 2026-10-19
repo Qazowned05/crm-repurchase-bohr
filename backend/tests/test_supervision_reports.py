@@ -125,6 +125,24 @@ def test_recovery_pagination_and_bulk_assignment_are_audited(client: TestClient,
     assert db.query(AlertAssignmentHistory).filter(AlertAssignmentHistory.assigned_advisor_id == target.id).count() == 2
 
 
+def test_recovery_alerts_can_be_deleted_individually_or_in_bulk_by_supervision(client: TestClient, db: Session) -> None:
+    first, _, supervisor_auth, advisor = setup_sale(client, db, date.today() - timedelta(days=30), suffix="deleteone")
+    second, _, _, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="deletetwo")
+    client.get("/api/v1/alerts/inbox", headers=supervisor_auth)
+    for sale in (first, second):
+        assert client.post(
+            f"/api/v1/supervision/customers/{sale['customer_id']}/transfer", headers=supervisor_auth,
+            json={"assigned_advisor_id": None, "reason": "Descartar recuperación"},
+        ).status_code == 200
+    alert_ids = [alert.id for alert in db.query(Alert).order_by(Alert.id)]
+    assert client.delete(f"/api/v1/supervision/alerts/{alert_ids[0]}", headers=auth(client, advisor.email)).status_code == 403
+    assert client.delete(f"/api/v1/supervision/alerts/{alert_ids[0]}", headers=supervisor_auth).status_code == 204
+    deleted = client.post("/api/v1/supervision/alerts/bulk-delete", headers=supervisor_auth, json={"alert_ids": [alert_ids[1]]})
+    assert deleted.status_code == 200
+    assert deleted.json()["count"] == 1
+    assert db.query(Alert).count() == 0
+
+
 def test_recovery_queue_filters_by_days_since_original_sale(client: TestClient, db: Session) -> None:
     sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="saleage")
     client.get("/api/v1/alerts/inbox", headers=supervisor_auth)

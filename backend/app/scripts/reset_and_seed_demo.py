@@ -149,21 +149,21 @@ def seed_demo_45(db: Session, advisors: list[User], today: date) -> None:
     follow_up = ContactTypification(code="CONTACTO_EFECTIVO", name="Contacto efectivo", is_active=True)
     follow_up_child = ContactTypification(
         parent_id=None, code="SOLICITA_LLAMADA", name="Solicita llamada de seguimiento",
-        is_active=True, requires_next_action=True,
+        is_active=True, requires_next_action=True, lead_outcome="AGENDADO",
     )
     no_contact = ContactTypification(code="SIN_CONTACTO", name="Sin contacto", is_active=True)
     no_response_child = ContactTypification(
         parent_id=None, code="SIN_RESPUESTA", name="Sin respuesta",
-        is_active=True, requires_next_action=True,
+        is_active=True, requires_next_action=True, lead_outcome="RECUPERABLE",
     )
     close = ContactTypification(code="CIERRE_COMERCIAL", name="Cierre comercial", is_active=True)
     close_child = ContactTypification(
         parent_id=None, code="NO_INTERESADO", name="No interesado",
-        is_active=True, requires_close=True, requires_note=True,
+        is_active=True, requires_close=True, requires_note=True, lead_outcome="RECUPERABLE",
     )
     repurchase = ContactTypification(code="PEDIDO", name="Pedido", is_active=True)
     repurchase_child = ContactTypification(
-        parent_id=None, code="PEDIDO_CONFIRMADO", name="Pedido de recompra confirmado", is_active=True,
+        parent_id=None, code="PEDIDO_CONFIRMADO", name="Pedido de recompra confirmado", is_active=True, lead_outcome="EFECTIVO",
     )
     roots = [follow_up, no_contact, close, repurchase]
     db.add_all(roots)

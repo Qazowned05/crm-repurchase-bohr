@@ -10,6 +10,7 @@ class ContactAttemptCreate(BaseModel):
     typification_id: str | None = None
     note: str | None = Field(default=None, max_length=4000)
     next_action_date: date | None = None
+    next_action_at: datetime | None = None
     close_alert: bool = False
 
 
@@ -47,6 +48,7 @@ class AlertResponse(BaseModel):
     status: str
     attempts_count: int
     next_action_date: date | None
+    next_action_at: datetime | None
     last_contact_at: datetime | None
     closed_at: datetime | None
     closure_reason: str | None

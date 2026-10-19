@@ -87,7 +87,15 @@ function advisorAvatarTone(name: string) {
   return name.charCodeAt(0) % 5;
 }
 
-export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
+export const Dashboard = memo(function Dashboard({
+  user,
+  alertToManageId,
+  onAlertOpened,
+}: {
+  user: User;
+  alertToManageId?: string | null;
+  onAlertOpened?: () => void;
+}) {
   const currentMonthStart = `${new Date().toISOString().slice(0, 8)}01`;
   const [alertPage, setAlertPage] = useState<Paged<ManagedAlert>>({
     items: [],
@@ -140,15 +148,15 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
     if (user.role !== "ASESOR") {
       loadMetrics().catch(() => {});
     }
+    api<TypificationTree[]>("/configuration/contact-typifications/tree")
+      .then(setTypifications)
+      .catch(() => {});
+    listAll<Product>("/products")
+      .then((value) => setProducts(value.filter((product) => product.is_active)))
+      .catch(() => {});
     if (user.role === "ASESOR") {
       api<AdvisorSalesMetrics>(`/sales/me/metrics?date_from=${currentMonthStart}`)
         .then(setAdvisorMetrics)
-        .catch(() => {});
-      api<TypificationTree[]>("/configuration/contact-typifications/tree")
-        .then(setTypifications)
-        .catch(() => {});
-      listAll<Product>("/products")
-        .then((value) => setProducts(value.filter((product) => product.is_active)))
         .catch(() => {});
       api<UpcomingAlert[]>("/alerts/upcoming")
         .then(setUpcomingAlerts)
@@ -220,6 +228,13 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
     setExtraRepurchaseLines([]);
     setManagementError("");
   };
+  useEffect(() => {
+    if (!alertToManageId) return;
+    api<Alert>(`/alerts/${alertToManageId}`)
+      .then(openAlert)
+      .catch(() => {})
+      .finally(onAlertOpened);
+  }, [alertToManageId]);
   const manageAlert = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedAlert) return;
@@ -252,6 +267,8 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
         });
       } else {
         if (!selectedTypification) return;
+        const nextActionDate = String(form.get("next_action_date") || "") || undefined;
+        const nextActionTime = String(form.get("next_action_time") || "") || undefined;
         await api(`/alerts/${selectedAlert.id}/attempts`, {
           method: "POST",
           body: JSON.stringify({
@@ -259,7 +276,10 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
             result: selectedTypification.code,
             typification_id: selectedTypification.id,
             note: form.get("note") || undefined,
-            next_action_date: form.get("next_action_date") || undefined,
+            next_action_date: nextActionDate,
+            next_action_at: nextActionDate && nextActionTime
+              ? new Date(`${nextActionDate}T${nextActionTime}`).toISOString()
+              : undefined,
           }),
         });
       }
@@ -968,7 +988,7 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
             {selectedAlert.next_action_date && (
               <p>
                 <span>Próxima acción</span>
-                <strong>{selectedAlert.next_action_date}</strong>
+                <strong>{formatAlertDate(selectedAlert.next_action_at || selectedAlert.next_action_date, Boolean(selectedAlert.next_action_at))}</strong>
               </p>
             )}
           </section>
@@ -1232,15 +1252,21 @@ export const Dashboard = memo(function Dashboard({ user }: { user: User }) {
                     </select>
                   </label>
                   {selectedTypification?.requires_next_action && (
-                    <label>
-                      Próxima acción
-                      <input
-                        name="next_action_date"
-                        type="date"
-                        min={new Date().toISOString().slice(0, 10)}
-                        required
-                      />
-                    </label>
+                    <>
+                      <label>
+                        Próxima acción
+                        <input
+                          name="next_action_date"
+                          type="date"
+                          min={new Date().toISOString().slice(0, 10)}
+                          required
+                        />
+                      </label>
+                      <label>
+                        Hora de recordatorio
+                        <input name="next_action_time" type="time" required />
+                      </label>
+                    </>
                   )}
                   {selectedTypification?.requires_note && (
                     <label className="notes">

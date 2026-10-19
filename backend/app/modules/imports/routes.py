@@ -29,6 +29,7 @@ from app.modules.sales.models import Sale, SaleItem
 from app.modules.sales.routes import recompute_chain, rule_for
 from app.modules.alerts.service import run_alert_generation
 from app.data.ubigeo import locations, location_hierarchy
+from app.modules.leads.models import Lead, LeadAssignmentHistory
 
 router = APIRouter(prefix="/api/v1/imports", tags=["imports"])
 
@@ -36,6 +37,7 @@ HEADERS = {
     "customers": ["customer_type", "dni", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"],
     "products": ["code", "name", "brand", "category", "unit_price", "is_active", "duration_days", "alert_days", "effective_from"],
     "historical_sales": ["numero_venta", "customer_dni", "sale_date", "advisor_email", "channel", "channel_detail", "product_code", "quantity", "notes", "historical_unit_price"],
+    "leads": ["full_name", "phone", "source", "email", "initial_product_code", "notes", "assigned_advisor_email"],
 }
 LEGACY_CUSTOMER_HEADERS = ["dni", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"]
 
@@ -129,6 +131,8 @@ def workbook_rows(content: bytes, import_type: str) -> tuple[list[dict], list[di
 def validate_rows(rows: list[dict], import_type: str, db: Session, allow_updates: bool, allow_reassignment: bool) -> tuple[list[dict], list[dict]]:
     if import_type == "historical_sales":
         return validate_historical_sales(rows, db)
+    if import_type == "leads":
+        return validate_leads(rows, db)
     errors: list[dict] = []
     seen: set[str] = set()
     valid: list[dict] = []
@@ -218,6 +222,46 @@ def validate_rows(rows: list[dict], import_type: str, db: Session, allow_updates
                         raise ValueError("A repurchase rule already exists for this effective date")
             valid.append({"row_number": row_number, "action": action, "data": data})
         except (ValidationError, ValueError, TypeError) as error:
+            add_error(errors, row_number, str(error))
+    return valid, errors
+
+
+def validate_leads(rows: list[dict], db: Session) -> tuple[list[dict], list[dict]]:
+    errors: list[dict] = []
+    valid: list[dict] = []
+    advisors = {
+        advisor.email.lower(): advisor
+        for advisor in db.scalars(select(User).where(User.role == "ASESOR", User.is_active.is_(True)))
+    }
+    products = {
+        product.code.upper(): product
+        for product in db.scalars(select(Product).where(Product.is_active.is_(True)))
+    }
+    for source in rows:
+        row_number, data = source["row_number"], source["data"]
+        try:
+            full_name, phone = data["full_name"], data["phone"]
+            channel = (data["source"] or "").upper()
+            advisor = advisors.get((data["assigned_advisor_email"] or "").lower())
+            product_code = (data["initial_product_code"] or "").upper()
+            if not full_name or len(full_name) < 2:
+                raise ValueError("full_name must contain at least 2 characters")
+            if not phone or len(phone) < 6:
+                raise ValueError("phone must contain at least 6 characters")
+            if channel not in {"REDES_SOCIALES", "COMERCIAL_TV", "REFERIDO"}:
+                raise ValueError("source must be REDES_SOCIALES, COMERCIAL_TV, or REFERIDO")
+            if advisor is None:
+                raise ValueError("assigned_advisor_email must identify an active ASESOR")
+            product = products.get(product_code) if product_code else None
+            if product_code and product is None:
+                raise ValueError("initial_product_code must identify an active product")
+            valid.append({"row_number": row_number, "action": "new", "data": {
+                "full_name": full_name.strip(), "phone": phone.strip(), "source": channel,
+                "email": data["email"].lower() if data["email"] else None,
+                "initial_product_id": product.id if product else None,
+                "notes": data["notes"], "assigned_advisor_id": advisor.id,
+            }})
+        except (ValueError, TypeError) as error:
             add_error(errors, row_number, str(error))
     return valid, errors
 
@@ -405,6 +449,25 @@ def download_template(import_type: str, _: User = Depends(require_roles("SUPERVI
         sheet.add_data_validation(department_validation); department_validation.add("J2:J1000")
         sheet.add_data_validation(province_validation); province_validation.add("K2:K1000")
         sheet.add_data_validation(district_validation); district_validation.add("L2:L1000")
+    elif import_type == "leads":
+        advisors = list(db.scalars(select(User).where(User.role == "ASESOR", User.is_active.is_(True)).order_by(User.email)))
+        products = list(db.scalars(select(Product).where(Product.is_active.is_(True)).order_by(Product.code)))
+        for row, advisor in enumerate(advisors, start=1): lists.cell(row=row, column=1, value=excel_safe(advisor.email))
+        for row, product in enumerate(products, start=1): lists.cell(row=row, column=2, value=excel_safe(product.code))
+        if advisors:
+            validation = DataValidation(type="list", formula1=f"'_lists'!$A$1:$A${len(advisors)}", allow_blank=False)
+            sheet.add_data_validation(validation); validation.add("G2:G1000")
+        if products:
+            validation = DataValidation(type="list", formula1=f"'_lists'!$B$1:$B${len(products)}", allow_blank=True)
+            sheet.add_data_validation(validation); validation.add("E2:E1000")
+        source_validation = DataValidation(type="list", formula1='"REDES_SOCIALES,COMERCIAL_TV,REFERIDO"', allow_blank=False)
+        sheet.add_data_validation(source_validation); source_validation.add("C2:C1000")
+        example.append(["Ana Ejemplo", "999999999", "REDES_SOCIALES", "ana@example.com", excel_safe(products[0].code) if products else "", "Campaña de captación", excel_safe(advisors[0].email) if advisors else "asesor@example.com"])
+        instructions = workbook.create_sheet("Instrucciones")
+        instructions.append(["Campo", "Cómo usarlo"])
+        instructions.append(["assigned_advisor_email", "Correo exacto de un asesor activo. Cada lead se crea asignado y pendiente."])
+        instructions.append(["source", "Usa REDES_SOCIALES, COMERCIAL_TV o REFERIDO."])
+        instructions.append(["initial_product_code", "Opcional. Selecciona un código disponible desde la lista."])
     else:
         advisors = list(db.scalars(select(User).where(User.role == "ASESOR", User.is_active.is_(True)).order_by(User.email)))
         products = list(db.scalars(select(Product).where(Product.is_active.is_(True)).order_by(Product.code)))
@@ -609,6 +672,16 @@ def commit_import(job_id: str, current_user: User = Depends(require_roles("SUPER
                 if data.get("duration_days") is not None:
                     rule = ProductRepurchaseRule(product_id=product.id, duration_days=data["duration_days"], alert_days=data["alert_days"], effective_from=date.fromisoformat(data["effective_from"]), created_by_user_id=current_user.id)
                     db.add(rule); db.flush(); record_audit(db, actor_id=current_user.id, entity_type="product_rule", entity_id=rule.id, action="CREATED", after={"product_id": product.id, "import_job_id": job.id})
+            elif job.import_type == "leads":
+                lead = Lead(**data)
+                db.add(lead); db.flush()
+                db.add(LeadAssignmentHistory(lead_id=lead.id, previous_advisor_id=None,
+                                              assigned_advisor_id=lead.assigned_advisor_id,
+                                              reason="Asignación mediante importación",
+                                              assigned_by_user_id=current_user.id))
+                record_audit(db, actor_id=current_user.id, entity_type="lead", entity_id=lead.id,
+                             action="IMPORTED", after={"import_job_id": job.id,
+                                                       "assigned_advisor_id": lead.assigned_advisor_id})
             else:
                 # Rows are validated individually but committed as grouped sale lines.
                 if data["numero_venta"] in processed_references:

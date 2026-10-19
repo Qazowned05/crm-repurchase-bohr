@@ -60,6 +60,7 @@ Configura `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` en `.env` antes del p
 
 - [Arquitectura y modelo de datos](docs/ARCHITECTURE.md)
 - [Flujo operativo completo](docs/OPERATIONS.md)
+- [Notificaciones y futura migración a tiempo real](docs/NOTIFICATIONS.md)
 - [Despliegue, seguridad y mantenimiento](docs/DEPLOYMENT.md)
 
 ## Calidad

@@ -15,14 +15,18 @@ from app.modules.supervision.routes import router as supervision_router
 from app.modules.reports.routes import router as reports_router
 from app.modules.configuration.routes import router as configuration_router
 from app.modules.alerts.service import start_alert_scheduler, stop_alert_scheduler
+from app.modules.leads.routes import router as leads_router
+from app.modules.leads.service import start_lead_scheduler, stop_lead_scheduler
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     start_alert_scheduler()
+    start_lead_scheduler()
     try:
         yield
     finally:
         stop_alert_scheduler()
+        stop_lead_scheduler()
 
 
 app = FastAPI(title="CRM Fidelizacion API", version="0.1.0", lifespan=lifespan)
@@ -45,6 +49,7 @@ app.include_router(alerts_router)
 app.include_router(supervision_router)
 app.include_router(reports_router)
 app.include_router(configuration_router)
+app.include_router(leads_router)
 
 
 @app.get("/health", tags=["system"])
