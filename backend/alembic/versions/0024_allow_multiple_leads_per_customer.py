@@ -5,6 +5,7 @@ Revises: 0023_leads
 """
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 
@@ -15,8 +16,13 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.drop_constraint("leads_converted_customer_id_key", "leads", type_="unique")
-    op.create_index("ix_leads_converted_customer_id", "leads", ["converted_customer_id"])
+    bind = op.get_bind()
+    unique_constraints = {item["name"] for item in sa.inspect(bind).get_unique_constraints("leads")}
+    if "leads_converted_customer_id_key" in unique_constraints:
+        op.drop_constraint("leads_converted_customer_id_key", "leads", type_="unique")
+    indexes = {item["name"] for item in sa.inspect(bind).get_indexes("leads")}
+    if "ix_leads_converted_customer_id" not in indexes:
+        op.create_index("ix_leads_converted_customer_id", "leads", ["converted_customer_id"])
 
 
 def downgrade() -> None:
