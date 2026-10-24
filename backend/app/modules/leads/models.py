@@ -12,9 +12,11 @@ class Lead(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     full_name: Mapped[str] = mapped_column(String(255))
+    dni: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     phone: Mapped[str] = mapped_column(String(30), index=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    source: Mapped[str] = mapped_column(String(30), index=True)
+    condition: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id", ondelete="RESTRICT"), index=True)
     initial_product_id: Mapped[str | None] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="PENDIENTE", index=True)

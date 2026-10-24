@@ -13,6 +13,7 @@ class ContactTypificationCreate(BaseModel):
     requires_note: bool = False
     requires_close: bool = Field(default=False, description="Closing typification: using it closes the managed alert.")
     lead_outcome: Literal["PENDIENTE", "AGENDADO", "RECUPERABLE", "EFECTIVO"] | None = None
+    scope: Literal["BOTH", "LEADS_ONLY"] = "BOTH"
 
     @field_validator("code")
     @classmethod
@@ -39,6 +40,7 @@ class ContactTypificationUpdate(BaseModel):
     requires_note: bool | None = None
     requires_close: bool | None = Field(default=None, description="Closing typification: using it closes the managed alert.")
     lead_outcome: Literal["PENDIENTE", "AGENDADO", "RECUPERABLE", "EFECTIVO"] | None = None
+    scope: Literal["BOTH", "LEADS_ONLY"] | None = None
 
     @field_validator("name")
     @classmethod

@@ -18,6 +18,7 @@ function rules(node: Typification): string[] {
     node.requires_note ? "Nota" : null,
     node.requires_close ? "Cierre" : null,
     node.lead_outcome ? `Lead: ${node.lead_outcome.replaceAll("_", " ")}` : null,
+    node.scope === "LEADS_ONLY" ? "Solo leads" : null,
   ].filter((rule): rule is string => rule !== null);
 }
 function TreeNode({
@@ -132,6 +133,14 @@ export function Configuration() {
         { value: "EFECTIVO", label: "Efectivo" },
       ],
     },
+    {
+      name: "scope",
+      label: "Disponible en",
+      options: [
+        { value: "BOTH", label: "Leads y alertas" },
+        { value: "LEADS_ONLY", label: "Solo leads" },
+      ],
+    },
   ];
   return (
     <>
@@ -175,7 +184,7 @@ export function Configuration() {
           initial={
             edit
               ? { ...edit, parent_id: edit.parent_id || "__root__" }
-              : { parent_id: "__root__", is_active: true }
+              : { parent_id: "__root__", is_active: true, scope: "BOTH" }
           }
           onClose={() => setEdit(undefined)}
           onSave={async (data) => {

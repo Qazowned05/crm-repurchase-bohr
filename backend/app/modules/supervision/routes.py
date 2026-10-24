@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from math import ceil
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.database import get_db
+from app.modules.audit.models import AuditLog
 from app.core.pagination import paginate_items
 from app.dependencies import require_roles
-from app.modules.alerts.models import Alert, AlertContactAttempt
+from app.modules.alerts.models import Alert, AlertContactAttempt, AlertNotification
 from app.modules.alerts.schemas import AlertResponse
 from app.modules.alerts.service import RECOVERABLE_FINAL_STATUSES, active_alerts_query, alert_response, recovery_alerts_query
 from app.modules.auth.models import User
@@ -71,17 +72,47 @@ def record_alert_assignment(alert: Alert, advisor_id: str | None, reason: str, a
 
 def delete_recovery_alerts(alerts: list[Alert], current_user: User, db: Session) -> None:
     alert_ids = [alert.id for alert in alerts]
-    db.execute(update(Sale).where(Sale.source_alert_id.in_(alert_ids)).values(source_alert_id=None))
+    db.execute(delete(AlertNotification).where(AlertNotification.alert_id.in_(alert_ids)))
     for alert in alerts:
+        before = {"status": alert.status, "closure_reason": alert.closure_reason}
+        alert.status = "ELIMINADA"
+        alert.assigned_advisor_id = None
+        alert.next_action_date = None
+        alert.next_action_at = None
+        alert.closed_at = datetime.now(timezone.utc)
+        alert.closure_reason = "ELIMINADA_DESDE_RECUPERACION"
         record_audit(
             db,
             actor_id=current_user.id,
             entity_type="alert",
             entity_id=alert.id,
             action="DELETED_FROM_RECOVERY",
-            before={"status": alert.status, "closure_reason": alert.closure_reason},
+            before=before,
+            after={"status": alert.status, "closure_reason": alert.closure_reason},
         )
-        db.delete(alert)
+
+
+def previously_regenerated_alerts(db: Session) -> list[tuple[Alert, AuditLog]]:
+    rows: list[tuple[Alert, AuditLog]] = []
+    seen_alert_ids: set[str] = set()
+    deletion_logs = db.scalars(select(AuditLog).where(
+        AuditLog.entity_type == "alert", AuditLog.action == "DELETED_FROM_RECOVERY",
+    ).order_by(AuditLog.created_at.desc()))
+    for deletion in deletion_logs:
+        generation = db.scalar(select(AuditLog).where(
+            AuditLog.entity_type == "alert", AuditLog.entity_id == deletion.entity_id,
+            AuditLog.action == "GENERATED",
+        ).order_by(AuditLog.created_at).limit(1))
+        sale_item_id = (generation.after_data or {}).get("sale_item_id") if generation else None
+        if not sale_item_id:
+            continue
+        regenerated = db.scalar(select(Alert).where(
+            Alert.sale_item_id == sale_item_id, Alert.status != "ELIMINADA",
+        ).order_by(Alert.created_at.desc()).limit(1))
+        if regenerated and regenerated.id not in seen_alert_ids:
+            seen_alert_ids.add(regenerated.id)
+            rows.append((regenerated, deletion))
+    return rows
 
 
 @router.post("/customers/{customer_id}/transfer")
@@ -125,6 +156,29 @@ def recovery_alerts(
 ) -> list[dict] | dict:
     rows = [alert_response(alert, db) for alert in db.scalars(recovery_alerts_query(db).order_by(Alert.alert_date))]
     return paginate_items(rows, page, page_size)
+
+
+@router.get("/previously-deleted-alerts")
+def list_previously_deleted_alerts(
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
+) -> list[dict]:
+    return [
+        {**alert_response(alert, db), "previously_deleted_at": deletion.created_at}
+        for alert, deletion in previously_regenerated_alerts(db)
+    ]
+
+
+@router.post("/previously-deleted-alerts/delete")
+def delete_previously_deleted_alerts(
+    payload: BulkAlertDelete,
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
+) -> dict:
+    candidates = {alert.id: alert for alert, _ in previously_regenerated_alerts(db)}
+    if not set(payload.alert_ids).issubset(candidates):
+        raise HTTPException(status_code=409, detail="Only alerts regenerated after a previous deletion can be removed here")
+    delete_recovery_alerts([candidates[alert_id] for alert_id in payload.alert_ids], current_user, db)
+    db.commit()
+    return {"deleted_alert_ids": payload.alert_ids, "count": len(payload.alert_ids)}
 
 
 @router.get("/recovery-queue")

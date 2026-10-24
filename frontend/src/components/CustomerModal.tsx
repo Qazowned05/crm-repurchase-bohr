@@ -7,12 +7,14 @@ type CustomerPayload = Record<string, string | undefined>;
 
 export function CustomerModal({
   customer,
+  initial,
   role,
   title,
   onClose,
   onSave,
 }: {
   customer?: Customer | null;
+  initial?: CustomerPayload;
   role: Role;
   title: string;
   onClose: () => void;
@@ -21,13 +23,13 @@ export function CustomerModal({
   const [locations, setLocations] = useState<LocationDepartment[]>([]);
   const [advisors, setAdvisors] = useState<User[]>([]);
   const [responsibleAdvisorId, setResponsibleAdvisorId] = useState(
-    customer?.responsible_advisor_id || "",
+    customer?.responsible_advisor_id || initial?.responsible_advisor_id || "",
   );
   const [departmentCode, setDepartmentCode] = useState("");
   const [provinceCode, setProvinceCode] = useState("");
   const [ubigeo, setUbigeo] = useState(customer?.ubigeo || "");
   const [customerType, setCustomerType] = useState<"PERSONA" | "EMPRESA">(
-    customer?.customer_type || "PERSONA",
+    (customer?.customer_type || initial?.customer_type || "PERSONA") as "PERSONA" | "EMPRESA",
   );
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -115,7 +117,7 @@ export function CustomerModal({
             {isCompany ? "RUC" : "DNI"}
             <input
               name="dni"
-              defaultValue={customer?.dni || ""}
+              defaultValue={customer?.dni || initial?.dni || ""}
               required
               minLength={isCompany ? 11 : 6}
               maxLength={isCompany ? 11 : 20}
@@ -129,7 +131,7 @@ export function CustomerModal({
               Razón social
               <input
                 name="business_name"
-                defaultValue={customer?.business_name || ""}
+                  defaultValue={customer?.business_name || initial?.business_name || ""}
                 required
                 minLength={2}
                 maxLength={255}
@@ -141,7 +143,7 @@ export function CustomerModal({
                 Nombres
                 <input
                   name="first_names"
-                  defaultValue={customer?.first_names || ""}
+                  defaultValue={customer?.first_names || initial?.first_names || ""}
                   required
                   minLength={2}
                   maxLength={120}
@@ -151,7 +153,7 @@ export function CustomerModal({
                 Apellidos
                 <input
                   name="last_names"
-                  defaultValue={customer?.last_names || ""}
+                  defaultValue={customer?.last_names || initial?.last_names || ""}
                   required
                   minLength={2}
                   maxLength={120}
@@ -163,7 +165,7 @@ export function CustomerModal({
             Teléfono
             <input
               name="phone"
-              defaultValue={customer?.phone || ""}
+              defaultValue={customer?.phone || initial?.phone || ""}
               required
               minLength={6}
               maxLength={30}
@@ -171,7 +173,7 @@ export function CustomerModal({
           </label>
           <label>
             Correo
-            <input name="email" type="email" defaultValue={customer?.email || ""} />
+            <input name="email" type="email" defaultValue={customer?.email || initial?.email || ""} />
           </label>
           {!isCompany && (
             <label>
@@ -204,7 +206,7 @@ export function CustomerModal({
           )}
           <label className="notes">
             Enfermedad o condición
-            <textarea name="condition" defaultValue={customer?.condition || ""} maxLength={500} />
+            <textarea name="condition" defaultValue={customer?.condition || initial?.condition || ""} maxLength={500} />
           </label>
           <label>
             Departamento

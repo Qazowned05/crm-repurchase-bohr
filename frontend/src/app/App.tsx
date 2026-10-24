@@ -11,7 +11,9 @@ import { Sales } from "../features/sales/Sales";
 import { AlertRegister } from "../features/alerts/AlertRegister";
 import { Operations } from "../features/operations/Operations";
 import { Leads } from "../features/leads/Leads";
+import { LeadsDashboard } from "../features/leads/LeadsDashboard";
 import { LeadRecoveryQueue } from "../features/leads/LeadRecoveryQueue";
+import { Campaigns } from "../features/campaigns/Campaigns";
 type View =
   | "dashboard"
   | "sales"
@@ -23,7 +25,9 @@ type View =
   | "configuration"
   | "operations"
   | "leads"
-  | "lead-recovery";
+  | "leads-dashboard"
+  | "lead-recovery"
+  | "campaigns";
 type NotificationItem =
   | { kind: "ALERT"; value: AlertNotification }
   | { kind: "LEAD"; value: LeadNotification };
@@ -119,6 +123,7 @@ export function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [closedAlertReminderIds, setClosedAlertReminderIds] = useState<Set<string>>(new Set());
   const [alertToManageId, setAlertToManageId] = useState<string | null>(null);
+  const [leadToManageId, setLeadToManageId] = useState<string | null>(null);
   const notificationsMenuRef = useRef<HTMLDivElement>(null);
   const [openNavGroups, setOpenNavGroups] = useState<Record<string, boolean>>({
     Principal: true,
@@ -157,6 +162,7 @@ export function App() {
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
   }, [notificationsOpen]);
   const handleAlertOpened = useCallback(() => setAlertToManageId(null), []);
+  const handleLeadOpened = useCallback(() => setLeadToManageId(null), []);
   if (!ready) return <main className="loading">Cargando CRM...</main>;
   if (!user)
     return (
@@ -182,8 +188,10 @@ export function App() {
     products: "Productos y reglas",
     users: "Usuarios",
     configuration: "Tipificaciones",
+    campaigns: "Campañas",
     operations: "Operaciones",
     leads: "Leads",
+    "leads-dashboard": "Resumen de Leads",
     "lead-recovery": "Leads recuperables",
   };
   const viewPaths: Record<View, string> = {
@@ -197,7 +205,9 @@ export function App() {
     configuration: "/tipificaciones",
     operations: "/operaciones",
     leads: "/leads",
+    "leads-dashboard": "/leads/resumen",
     "lead-recovery": "/leads-recuperables",
+    campaigns: "/campanas",
   };
   const pathToView = Object.fromEntries(
     Object.entries(viewPaths).map(([viewId, path]) => [path, viewId]),
@@ -223,7 +233,7 @@ export function App() {
       label: "Seguimiento",
       items: [
         ["leads", "Leads"],
-        ...(supervisor ? [["lead-recovery", "Leads recuperables"] as [View, string]] : []),
+        ...(supervisor ? [["leads-dashboard", "Resumen de Leads"] as [View, string], ["lead-recovery", "Leads recuperables"] as [View, string]] : []),
       ],
     },
   ];
@@ -234,6 +244,7 @@ export function App() {
         ["customers", "Clientes"],
         ["products", "Productos"],
         ["configuration", "Tipificaciones"],
+        ["campaigns", "Campañas"],
         ...(user.role === "ADMIN" ? [["users", "Usuarios"] as [View, string]] : []),
       ],
     });
@@ -244,7 +255,9 @@ export function App() {
     ) : activeView === "sales" ? (
       <Sales user={user} />
     ) : activeView === "leads" ? (
-      <Leads user={user} />
+      <Leads user={user} leadToManageId={leadToManageId} onLeadOpened={handleLeadOpened} />
+    ) : activeView === "leads-dashboard" ? (
+      supervisor ? <LeadsDashboard /> : <Dashboard user={user} />
     ) : activeView === "lead-recovery" ? (
       supervisor ? <LeadRecoveryQueue user={user} /> : <Dashboard user={user} />
     ) : activeView === "alert-register" ? (
@@ -257,6 +270,8 @@ export function App() {
       )
     ) : activeView === "configuration" ? (
       <Configuration />
+    ) : activeView === "campaigns" ? (
+      <Campaigns />
     ) : activeView === "operations" ? (
       <Operations />
     ) : (
@@ -267,7 +282,7 @@ export function App() {
   };
   if (
     !supervisor &&
-    ["recovery", "lead-recovery", "customers", "products", "configuration", "operations", "users"].includes(view)
+    ["recovery", "lead-recovery", "customers", "products", "configuration", "campaigns", "operations", "users"].includes(view)
   )
     return <Navigate to="/" replace />;
   if (user.role !== "ADMIN" && view === "users") return <Navigate to="/" replace />;
@@ -404,7 +419,10 @@ export function App() {
                           if (notification.kind === "ALERT") {
                             setAlertToManageId(notification.value.alert_id);
                             routerNavigate("/");
-                          } else routerNavigate("/leads");
+                          } else {
+                            setLeadToManageId(notification.value.lead_id);
+                            routerNavigate("/leads");
+                          }
                         }}
                       >
                         <b>Acción programada</b>

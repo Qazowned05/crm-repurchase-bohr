@@ -7,6 +7,7 @@ import { api, listAll } from "../../services/api";
 import { DataPanel } from "../../components/DataPanel";
 import { PageHeader } from "../../components/PageHeader";
 import type {
+  Alert,
   Paged,
   Product,
   RecoveryAlert,
@@ -60,6 +61,7 @@ export function RecoveryQueue() {
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [previouslyDeleted, setPreviouslyDeleted] = useState<Alert[]>([]);
   const load = (page = data.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
@@ -76,11 +78,14 @@ export function RecoveryQueue() {
     api<User[]>("/users/advisors")
       .then(setAdvisors)
       .catch(() => {});
-    api<TypificationTree[]>("/configuration/contact-typifications/tree")
+    api<TypificationTree[]>("/configuration/contact-typifications/tree?flow=ALERTS")
       .then(setTree)
       .catch(() => {});
     listAll<Product>("/products")
       .then(setProducts)
+      .catch(() => {});
+    api<Alert[]>("/supervision/previously-deleted-alerts")
+      .then(setPreviouslyDeleted)
       .catch(() => {});
   }, []);
   const rows: QueueRow[] = data.items.flatMap((customer) =>
@@ -112,6 +117,7 @@ export function RecoveryQueue() {
           </span>
         }
       />
+      {previouslyDeleted.length > 0 && <DataPanel title="Alertas regeneradas tras una eliminación anterior" description="Estas alertas se eliminaron antes de la corrección y reaparecieron. Elimínalas aquí para retirarlas definitivamente de todas las colas."><div className="table-wrap"><table><thead><tr><th>Cliente</th><th>Producto</th><th>Estado actual</th><th /></tr></thead><tbody>{previouslyDeleted.map((alert) => <tr key={alert.id}><td>{`${alert.customer_first_names || ""} ${alert.customer_last_names || ""}`.trim() || "Sin cliente"}<span className="table-detail">{alert.customer_dni || ""}</span></td><td>{alert.product_name || "Sin producto"}</td><td><span className={alertStatusClass(alert.status)}>{alert.status.replaceAll("_", " ")}</span></td><td><button className="danger" onClick={async () => { if (!window.confirm("Eliminar esta alerta definitivamente?")) return; await api("/supervision/previously-deleted-alerts/delete", { method: "POST", body: JSON.stringify({ alert_ids: [alert.id] }) }); setPreviouslyDeleted((items) => items.filter((item) => item.id !== alert.id)); await load(); }}>Eliminar definitivamente</button></td></tr>)}</tbody></table></div></DataPanel>}
       <section className="panel filters">
         <div className="panel-heading">
           <div>

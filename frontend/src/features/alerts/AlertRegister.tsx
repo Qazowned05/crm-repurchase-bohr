@@ -34,6 +34,12 @@ function formatDate(value?: string | null, withTime = false) {
     ...(withTime ? { timeStyle: "short" } : {}),
   }).format(date);
 }
+function localDateTimeWithOffset(date: string, time: string) {
+  const local = new Date(`${date}T${time}`);
+  const offset = -local.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  return `${date}T${time}:00${sign}${String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0")}:${String(Math.abs(offset) % 60).padStart(2, "0")}`;
+}
 
 function daysOverdue(value: string) {
   return Math.max(0, Math.floor((Date.now() - new Date(`${value}T00:00:00`).getTime()) / 86400000));
@@ -243,7 +249,7 @@ function AlertManagement({
                   note: form.get("note") || undefined,
                   next_action_date: nextActionDate,
                   next_action_at: nextActionDate && nextActionTime
-                    ? new Date(`${nextActionDate}T${nextActionTime}`).toISOString()
+                    ? localDateTimeWithOffset(nextActionDate, nextActionTime)
                     : undefined,
                 }),
               });
@@ -554,7 +560,7 @@ export function AlertRegister() {
     api<User[]>("/users/advisors")
       .then(setAdvisors)
       .catch(() => {});
-    api<TypificationTree[]>("/configuration/contact-typifications/tree")
+    api<TypificationTree[]>("/configuration/contact-typifications/tree?flow=ALERTS")
       .then(setTypifications)
       .catch(() => {});
   }, []);

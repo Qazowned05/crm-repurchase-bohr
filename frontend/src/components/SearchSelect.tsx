@@ -7,6 +7,7 @@ export function SearchSelect({
   value,
   onChange,
   placeholder,
+  name,
   required = false,
   actionLabel,
   onAction,
@@ -15,6 +16,7 @@ export function SearchSelect({
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  name?: string;
   required?: boolean;
   actionLabel?: string;
   onAction?: () => void;
@@ -94,6 +96,7 @@ export function SearchSelect({
       {required && (
         <input className="search-select-required" value={value} onChange={() => {}} required />
       )}
+      {name && <input type="hidden" name={name} value={value} />}
     </div>
   );
 }

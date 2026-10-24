@@ -9,6 +9,7 @@ from app.core.audit import record_audit
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.modules.auth.models import User
+from app.modules.campaigns.models import Campaign
 from app.modules.configuration.models import ContactTypification
 from app.modules.leads.models import Lead, LeadActivity, LeadNotification
 from app.modules.products.models import Product
@@ -21,6 +22,7 @@ _scheduler_thread: Thread | None = None
 def lead_response(lead: Lead, db: Session) -> dict:
     advisor = db.get(User, lead.assigned_advisor_id) if lead.assigned_advisor_id else None
     product = db.get(Product, lead.initial_product_id) if lead.initial_product_id else None
+    campaign = db.get(Campaign, lead.campaign_id)
     latest_typification = db.scalar(
         select(ContactTypification)
         .join(LeadActivity, LeadActivity.typification_id == ContactTypification.id)
@@ -34,6 +36,8 @@ def lead_response(lead: Lead, db: Session) -> dict:
         "assigned_advisor_email": advisor.email if advisor else None,
         "initial_product_code": product.code if product else None,
         "initial_product_name": product.name if product else None,
+        "campaign_name": campaign.name if campaign else None,
+        "campaign_is_active": campaign.is_active if campaign else None,
         "latest_typification_id": latest_typification.id if latest_typification else None,
         "latest_typification_code": latest_typification.code if latest_typification else None,
         "latest_typification_name": latest_typification.name if latest_typification else None,

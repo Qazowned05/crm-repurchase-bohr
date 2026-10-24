@@ -7,6 +7,23 @@ export type Paged<T> = {
   pages: number;
 };
 export type User = { id: string; email: string; full_name: string; role: Role; is_active: boolean };
+export type LeadMetrics = {
+  start_date: string;
+  end_date: string;
+  total_leads: number;
+  effective_leads: number;
+  recoverable_leads: number;
+  conversion_rate: number;
+  recoverable_rate: number;
+  pending_leads: number;
+  scheduled_leads: number;
+  lead_sales: number;
+  lead_revenue: string;
+  average_ticket: string;
+  campaigns: Array<{ campaign_id: string; campaign_name: string; campaign_color: string; leads: number; effective: number; recoverable: number }>;
+  advisors: Array<{ advisor_id: string; advisor_name: string; leads: number; effective: number; recoverable: number; sales: number; revenue: string }>;
+  daily: Array<{ date: string; leads: number; effective: number }>;
+};
 export type Customer = {
   id: string;
   dni: string;
@@ -122,9 +139,12 @@ export type LeadStatus =
 export type Lead = {
   id: string;
   full_name: string;
+  dni?: string | null;
   phone: string;
   email?: string | null;
-  source: "REDES_SOCIALES" | "COMERCIAL_TV" | "REFERIDO";
+  condition?: string | null;
+  campaign_id: string;
+  campaign_name?: string | null;
   initial_product_id?: string | null;
   notes?: string | null;
   status: LeadStatus;
@@ -139,6 +159,7 @@ export type Lead = {
   latest_typification_name?: string | null;
   created_at: string;
 };
+export type Campaign = { id: string; name: string; color: string; is_active: boolean; created_at: string; updated_at: string };
 export type LeadActivity = {
   id: string;
   advisor_id: string;
@@ -189,6 +210,7 @@ export type Typification = {
   requires_note: boolean;
   requires_close: boolean;
   lead_outcome?: "PENDIENTE" | "AGENDADO" | "RECUPERABLE" | "EFECTIVO" | null;
+  scope: "BOTH" | "LEADS_ONLY";
 };
 export type TypificationTree = Typification & { children: TypificationTree[] };
 export type RecoveryAlert = Alert & {

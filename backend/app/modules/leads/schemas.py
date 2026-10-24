@@ -8,13 +8,25 @@ from app.modules.sales.schemas import SaleItemCreate
 
 
 class LeadCreate(BaseModel):
-    full_name: str = Field(min_length=2, max_length=255)
+    full_name: str | None = Field(default=None, max_length=255)
+    dni: str | None = Field(default=None, max_length=20)
     phone: str = Field(min_length=6, max_length=30)
-    source: Literal["REDES_SOCIALES", "COMERCIAL_TV", "REFERIDO"]
+    campaign_id: str
     email: EmailStr | None = None
+    condition: str | None = Field(default=None, max_length=500)
     initial_product_id: str | None = None
     notes: str | None = Field(default=None, max_length=4000)
     assigned_advisor_id: str | None = None
+
+
+class LeadUpdate(BaseModel):
+    full_name: str | None = Field(default=None, min_length=1, max_length=255)
+    dni: str | None = Field(default=None, max_length=20)
+    phone: str | None = Field(default=None, min_length=6, max_length=30)
+    email: EmailStr | None = None
+    condition: str | None = Field(default=None, max_length=500)
+    notes: str | None = Field(default=None, max_length=4000)
+    initial_product_id: str | None = None
 
 
 class LeadAssignmentCreate(BaseModel):

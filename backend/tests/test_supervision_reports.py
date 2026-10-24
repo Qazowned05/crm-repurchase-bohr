@@ -140,7 +140,10 @@ def test_recovery_alerts_can_be_deleted_individually_or_in_bulk_by_supervision(c
     deleted = client.post("/api/v1/supervision/alerts/bulk-delete", headers=supervisor_auth, json={"alert_ids": [alert_ids[1]]})
     assert deleted.status_code == 200
     assert deleted.json()["count"] == 1
-    assert db.query(Alert).count() == 0
+    assert db.query(Alert).count() == 2
+    assert {alert.status for alert in db.query(Alert)} == {"ELIMINADA"}
+    assert client.get("/api/v1/supervision/recovery-alerts", headers=supervisor_auth).json() == []
+    assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).json() == []
 
 
 def test_recovery_queue_filters_by_days_since_original_sale(client: TestClient, db: Session) -> None:

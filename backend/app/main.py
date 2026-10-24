@@ -17,6 +17,7 @@ from app.modules.configuration.routes import router as configuration_router
 from app.modules.alerts.service import start_alert_scheduler, stop_alert_scheduler
 from app.modules.leads.routes import router as leads_router
 from app.modules.leads.service import start_lead_scheduler, stop_lead_scheduler
+from app.modules.campaigns.routes import router as campaigns_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -50,6 +51,7 @@ app.include_router(supervision_router)
 app.include_router(reports_router)
 app.include_router(configuration_router)
 app.include_router(leads_router)
+app.include_router(campaigns_router)
 
 
 @app.get("/health", tags=["system"])

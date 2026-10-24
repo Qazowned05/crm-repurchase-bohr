@@ -238,7 +238,7 @@ def managed_register(
     """Persistent managed-alert register; unlike inbox, it includes follow-up and closed alerts."""
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="date_from cannot exceed date_to")
-    query = select(Alert)
+    query = select(Alert).where(Alert.status != "ELIMINADA")
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
     elif advisor_id:
@@ -357,11 +357,11 @@ def dismiss_notification(notification_id: str, current_user: User = Depends(get_
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/{alert_id}", response_model=AlertResponse)
+@router.get("/{alert_id}", response_model=ManagedAlertResponse)
 def get_alert(alert_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     alert = alert_or_404(alert_id, db)
     assert_alert_access(alert, current_user)
-    return alert_response(alert, db)
+    return managed_alert_response(alert, db)
 
 
 @router.get("/{alert_id}/attempts")
@@ -387,8 +387,9 @@ def add_attempt(alert_id: str, payload: ContactAttemptCreate, current_user: User
         typification = db.scalar(select(ContactTypification).where(
             (ContactTypification.id == payload.result.strip()) | (ContactTypification.code == result),
             ContactTypification.is_active.is_(True),
+            ContactTypification.scope == "BOTH",
         ))
-    if typification is not None and not typification.is_active:
+    if typification is not None and (not typification.is_active or typification.scope != "BOTH"):
         typification = None
     if typification is not None:
         result = typification.code

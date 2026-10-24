@@ -30,6 +30,7 @@ from app.modules.sales.routes import recompute_chain, rule_for
 from app.modules.alerts.service import run_alert_generation
 from app.data.ubigeo import locations, location_hierarchy
 from app.modules.leads.models import Lead, LeadAssignmentHistory
+from app.modules.campaigns.models import Campaign
 
 router = APIRouter(prefix="/api/v1/imports", tags=["imports"])
 
@@ -37,7 +38,7 @@ HEADERS = {
     "customers": ["customer_type", "dni", "business_name", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"],
     "products": ["code", "name", "brand", "category", "unit_price", "is_active", "duration_days", "alert_days", "effective_from"],
     "historical_sales": ["numero_venta", "customer_dni", "sale_date", "advisor_email", "channel", "channel_detail", "product_code", "quantity", "notes", "historical_unit_price"],
-    "leads": ["full_name", "phone", "source", "email", "initial_product_code", "notes", "assigned_advisor_email"],
+    "leads": ["full_name", "phone", "campaign_name", "email", "initial_product_code", "notes", "assigned_advisor_email"],
 }
 LEGACY_CUSTOMER_HEADERS = ["dni", "first_names", "last_names", "phone", "email", "birth_date", "condition", "department", "province", "district", "responsible_advisor_email"]
 
@@ -237,26 +238,28 @@ def validate_leads(rows: list[dict], db: Session) -> tuple[list[dict], list[dict
         product.code.upper(): product
         for product in db.scalars(select(Product).where(Product.is_active.is_(True)))
     }
+    campaigns = {
+        campaign.name.lower(): campaign
+        for campaign in db.scalars(select(Campaign).where(Campaign.is_active.is_(True)))
+    }
     for source in rows:
         row_number, data = source["row_number"], source["data"]
         try:
             full_name, phone = data["full_name"], data["phone"]
-            channel = (data["source"] or "").upper()
+            campaign = campaigns.get((data["campaign_name"] or "").strip().lower())
             advisor = advisors.get((data["assigned_advisor_email"] or "").lower())
             product_code = (data["initial_product_code"] or "").upper()
-            if not full_name or len(full_name) < 2:
-                raise ValueError("full_name must contain at least 2 characters")
             if not phone or len(phone) < 6:
                 raise ValueError("phone must contain at least 6 characters")
-            if channel not in {"REDES_SOCIALES", "COMERCIAL_TV", "REFERIDO"}:
-                raise ValueError("source must be REDES_SOCIALES, COMERCIAL_TV, or REFERIDO")
+            if campaign is None:
+                raise ValueError("campaign_name must identify an active campaign")
             if advisor is None:
                 raise ValueError("assigned_advisor_email must identify an active ASESOR")
             product = products.get(product_code) if product_code else None
             if product_code and product is None:
                 raise ValueError("initial_product_code must identify an active product")
             valid.append({"row_number": row_number, "action": "new", "data": {
-                "full_name": full_name.strip(), "phone": phone.strip(), "source": channel,
+                "full_name": full_name.strip() if full_name else f"Lead {phone.strip()}", "phone": phone.strip(), "campaign_id": campaign.id,
                 "email": data["email"].lower() if data["email"] else None,
                 "initial_product_id": product.id if product else None,
                 "notes": data["notes"], "assigned_advisor_id": advisor.id,
@@ -452,21 +455,26 @@ def download_template(import_type: str, _: User = Depends(require_roles("SUPERVI
     elif import_type == "leads":
         advisors = list(db.scalars(select(User).where(User.role == "ASESOR", User.is_active.is_(True)).order_by(User.email)))
         products = list(db.scalars(select(Product).where(Product.is_active.is_(True)).order_by(Product.code)))
+        campaigns = list(db.scalars(select(Campaign).where(Campaign.is_active.is_(True)).order_by(Campaign.name)))
         for row, advisor in enumerate(advisors, start=1): lists.cell(row=row, column=1, value=excel_safe(advisor.email))
         for row, product in enumerate(products, start=1): lists.cell(row=row, column=2, value=excel_safe(product.code))
+        for row, campaign in enumerate(campaigns, start=1): lists.cell(row=row, column=3, value=excel_safe(campaign.name))
         if advisors:
             validation = DataValidation(type="list", formula1=f"'_lists'!$A$1:$A${len(advisors)}", allow_blank=False)
             sheet.add_data_validation(validation); validation.add("G2:G1000")
         if products:
             validation = DataValidation(type="list", formula1=f"'_lists'!$B$1:$B${len(products)}", allow_blank=True)
             sheet.add_data_validation(validation); validation.add("E2:E1000")
-        source_validation = DataValidation(type="list", formula1='"REDES_SOCIALES,COMERCIAL_TV,REFERIDO"', allow_blank=False)
-        sheet.add_data_validation(source_validation); source_validation.add("C2:C1000")
-        example.append(["Ana Ejemplo", "999999999", "REDES_SOCIALES", "ana@example.com", excel_safe(products[0].code) if products else "", "Campaña de captación", excel_safe(advisors[0].email) if advisors else "asesor@example.com"])
+        if campaigns:
+            validation = DataValidation(type="list", formula1=f"'_lists'!$C$1:$C${len(campaigns)}", allow_blank=False)
+            sheet.add_data_validation(validation); validation.add("C2:C1000")
+        example.append(["Ana Ejemplo", "999999999", excel_safe(campaigns[0].name) if campaigns else "Campaña activa", "ana@example.com", excel_safe(products[0].code) if products else "", "Campaña de captación", excel_safe(advisors[0].email) if advisors else "asesor@example.com"])
         instructions = workbook.create_sheet("Instrucciones")
         instructions.append(["Campo", "Cómo usarlo"])
-        instructions.append(["assigned_advisor_email", "Correo exacto de un asesor activo. Cada lead se crea asignado y pendiente."])
-        instructions.append(["source", "Usa REDES_SOCIALES, COMERCIAL_TV o REFERIDO."])
+        instructions.append(["phone", "Obligatorio. Número de contacto del lead."])
+        instructions.append(["campaign_name", "Obligatorio. Selecciona una campaña activa desde la lista."])
+        instructions.append(["assigned_advisor_email", "Obligatorio. Correo exacto de un asesor activo. Cada lead se crea asignado y pendiente."])
+        instructions.append(["full_name", "Opcional. Si se omite, se asigna un nombre operativo basado en el teléfono."])
         instructions.append(["initial_product_code", "Opcional. Selecciona un código disponible desde la lista."])
     else:
         advisors = list(db.scalars(select(User).where(User.role == "ASESOR", User.is_active.is_(True)).order_by(User.email)))

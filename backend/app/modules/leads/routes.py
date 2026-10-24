@@ -9,11 +9,12 @@ from app.core.database import get_db
 from app.core.pagination import paginated_scalars
 from app.dependencies import get_current_user, require_roles
 from app.modules.auth.models import User
+from app.modules.campaigns.models import Campaign
 from app.modules.configuration.models import ContactTypification
 from app.modules.customers.models import Customer
 from app.modules.customers.routes import validate_location
 from app.modules.leads.models import Lead, LeadActivity, LeadAssignmentHistory, LeadNotification
-from app.modules.leads.schemas import BulkLeadAssignmentCreate, LeadActivityCreate, LeadAssignmentCreate, LeadConversionCreate, LeadCreate
+from app.modules.leads.schemas import BulkLeadAssignmentCreate, LeadActivityCreate, LeadAssignmentCreate, LeadConversionCreate, LeadCreate, LeadUpdate
 from app.modules.leads.service import lead_response
 from app.modules.products.models import Product
 from app.modules.sales.models import Sale, SaleItem
@@ -81,7 +82,7 @@ def latest_activity_subquery():
 
 def filtered_leads_query(
     current_user: User, *, status_filter: str | None = None, advisor_id: str | None = None,
-    q: str | None = None, sources: str | None = None, initial_product_id: str | None = None,
+    q: str | None = None, campaign_ids: str | None = None, initial_product_id: str | None = None,
     created_from: date | None = None, created_to: date | None = None, created_on: date | None = None,
     reassigned_on: date | None = None, activity_on: date | None = None,
     activity_from: date | None = None, activity_to: date | None = None, next_action: str | None = None,
@@ -101,10 +102,10 @@ def filtered_leads_query(
     if q and q.strip():
         term = f"%{q.strip()}%"
         query = query.where(or_(Lead.full_name.ilike(term), Lead.phone.ilike(term), Lead.email.ilike(term)))
-    if sources:
-        values = [value.strip() for value in sources.split(",") if value.strip()]
+    if campaign_ids:
+        values = [value.strip() for value in campaign_ids.split(",") if value.strip()]
         if values:
-            query = query.where(Lead.source.in_(values))
+            query = query.where(Lead.campaign_id.in_(values))
     if initial_product_id:
         query = query.where(Lead.initial_product_id == initial_product_id)
     if created_from:
@@ -118,15 +119,21 @@ def filtered_leads_query(
     if activity_on:
         query = query.where(or_(func.date(Lead.created_at) == activity_on, func.date(Lead.reassigned_at) == activity_on))
     if activity_from or activity_to:
-        created_period = []
-        reassigned_period = []
-        if activity_from:
-            created_period.append(func.date(Lead.created_at) >= activity_from)
-            reassigned_period.append(func.date(Lead.reassigned_at) >= activity_from)
-        if activity_to:
-            created_period.append(func.date(Lead.created_at) <= activity_to)
-            reassigned_period.append(func.date(Lead.reassigned_at) <= activity_to)
-        query = query.where(or_(and_(*created_period), and_(*reassigned_period)))
+        if status_filter == "AGENDADO":
+            if activity_from:
+                query = query.where(Lead.next_action_date >= activity_from)
+            if activity_to:
+                query = query.where(Lead.next_action_date <= activity_to)
+        else:
+            created_period = []
+            reassigned_period = []
+            if activity_from:
+                created_period.append(func.date(Lead.created_at) >= activity_from)
+                reassigned_period.append(func.date(Lead.reassigned_at) >= activity_from)
+            if activity_to:
+                created_period.append(func.date(Lead.created_at) <= activity_to)
+                reassigned_period.append(func.date(Lead.reassigned_at) <= activity_to)
+            query = query.where(or_(and_(*created_period), and_(*reassigned_period)))
     if typification_id:
         query = query.where(latest.c.typification_id == typification_id)
     today = datetime.now(timezone.utc).date()
@@ -160,32 +167,38 @@ def create_lead(payload: LeadCreate, current_user: User = Depends(require_roles(
         if assigned_advisor_id not in {None, current_user.id}:
             raise HTTPException(status_code=403, detail="Advisors cannot assign leads")
         assigned_advisor_id = current_user.id
+    elif assigned_advisor_id is None:
+        raise HTTPException(status_code=422, detail="An assigned advisor is required")
     validate_advisor(assigned_advisor_id, db)
     if payload.initial_product_id and db.get(Product, payload.initial_product_id) is None:
         raise HTTPException(status_code=422, detail="Initial product does not exist")
-    lead = Lead(full_name=payload.full_name.strip(), phone=payload.phone.strip(), email=str(payload.email).lower() if payload.email else None,
-                source=payload.source, initial_product_id=payload.initial_product_id, notes=payload.notes.strip() if payload.notes else None,
+    campaign = db.get(Campaign, payload.campaign_id)
+    if campaign is None or not campaign.is_active:
+        raise HTTPException(status_code=422, detail="Campaign must be active")
+    phone = payload.phone.strip()
+    lead = Lead(full_name=payload.full_name.strip() if payload.full_name and payload.full_name.strip() else f"Lead {phone}", dni=payload.dni.strip() if payload.dni else None, phone=phone, email=str(payload.email).lower() if payload.email else None,
+                  condition=payload.condition.strip() if payload.condition else None, campaign_id=payload.campaign_id, initial_product_id=payload.initial_product_id, notes=payload.notes.strip() if payload.notes else None,
                 assigned_advisor_id=assigned_advisor_id)
     db.add(lead)
     db.flush()
     if assigned_advisor_id:
         db.add(LeadAssignmentHistory(lead_id=lead.id, previous_advisor_id=None, assigned_advisor_id=assigned_advisor_id,
                                      reason="Asignación inicial", assigned_by_user_id=current_user.id))
-    record_audit(db, actor_id=current_user.id, entity_type="lead", entity_id=lead.id, action="CREATED", after={"source": lead.source, "assigned_advisor_id": assigned_advisor_id})
+    record_audit(db, actor_id=current_user.id, entity_type="lead", entity_id=lead.id, action="CREATED", after={"campaign_id": lead.campaign_id, "assigned_advisor_id": assigned_advisor_id})
     db.commit()
     return lead_response(lead, db)
 
 
 @router.get("")
 def list_leads(status_filter: str | None = Query(default=None, alias="status"), advisor_id: str | None = None, q: str | None = None,
-               sources: str | None = None, initial_product_id: str | None = None, created_from: date | None = None,
+               campaign_ids: str | None = None, initial_product_id: str | None = None, created_from: date | None = None,
                  created_to: date | None = None, created_on: date | None = None, reassigned_on: date | None = None,
                  activity_on: date | None = None, activity_from: date | None = None, activity_to: date | None = None,
                  next_action: str | None = None, typification_id: str | None = None,
                page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
                current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[dict] | dict:
     query = filtered_leads_query(
-        current_user, status_filter=status_filter, advisor_id=advisor_id, q=q, sources=sources,
+        current_user, status_filter=status_filter, advisor_id=advisor_id, q=q, campaign_ids=campaign_ids,
         initial_product_id=initial_product_id, created_from=created_from, created_to=created_to, created_on=created_on,
         reassigned_on=reassigned_on, activity_on=activity_on, activity_from=activity_from, activity_to=activity_to,
         next_action=next_action, typification_id=typification_id,
@@ -196,7 +209,7 @@ def list_leads(status_filter: str | None = Query(default=None, alias="status"), 
 
 @router.get("/board")
 def lead_board(status_filter: str | None = Query(default=None, alias="status"), advisor_id: str | None = None,
-               q: str | None = None, sources: str | None = None, initial_product_id: str | None = None,
+               q: str | None = None, campaign_ids: str | None = None, initial_product_id: str | None = None,
                  created_from: date | None = None, created_to: date | None = None, created_on: date | None = None,
                  reassigned_on: date | None = None, activity_on: date | None = None,
                  activity_from: date | None = None, activity_to: date | None = None, next_action: str | None = None,
@@ -206,7 +219,7 @@ def lead_board(status_filter: str | None = Query(default=None, alias="status"), 
                current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     size = page_size or pagesize or 20
     query = board_order(filtered_leads_query(
-        current_user, status_filter=status_filter, advisor_id=advisor_id, q=q, sources=sources,
+        current_user, status_filter=status_filter, advisor_id=advisor_id, q=q, campaign_ids=campaign_ids,
         initial_product_id=initial_product_id, created_from=created_from, created_to=created_to, created_on=created_on,
         reassigned_on=reassigned_on, activity_on=activity_on, activity_from=activity_from, activity_to=activity_to,
         next_action=next_action, typification_id=typification_id,
@@ -217,7 +230,7 @@ def lead_board(status_filter: str | None = Query(default=None, alias="status"), 
 
 
 @router.get("/board-summary")
-def lead_board_summary(advisor_id: str | None = None, q: str | None = None, sources: str | None = None,
+def lead_board_summary(advisor_id: str | None = None, q: str | None = None, campaign_ids: str | None = None,
                        initial_product_id: str | None = None, created_from: date | None = None,
                          created_to: date | None = None, created_on: date | None = None, reassigned_on: date | None = None,
                          activity_on: date | None = None, activity_from: date | None = None,
@@ -225,7 +238,7 @@ def lead_board_summary(advisor_id: str | None = None, q: str | None = None, sour
                        typification_id: str | None = None, current_user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)) -> dict:
     query = filtered_leads_query(
-        current_user, advisor_id=advisor_id, q=q, sources=sources, initial_product_id=initial_product_id,
+        current_user, advisor_id=advisor_id, q=q, campaign_ids=campaign_ids, initial_product_id=initial_product_id,
         created_from=created_from, created_to=created_to, created_on=created_on, reassigned_on=reassigned_on,
         activity_on=activity_on, activity_from=activity_from, activity_to=activity_to,
         next_action=next_action, typification_id=typification_id,
@@ -241,13 +254,13 @@ def lead_board_summary(advisor_id: str | None = None, q: str | None = None, sour
 
 
 @router.get("/recovery")
-def recovery_queue(q: str | None = None, source: str | None = None, advisor_id: str | None = None,
+def recovery_queue(q: str | None = None, campaign_id: str | None = None, advisor_id: str | None = None,
                    initial_product_id: str | None = None, created_on: date | None = None,
                    page: int | None = Query(default=None, ge=1), page_size: int | None = Query(default=None, ge=1, le=200),
                    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> list[dict] | dict:
     result = paginated_scalars(
         db,
-        filtered_leads_query(current_user, status_filter="RECUPERABLE", q=q, sources=source,
+        filtered_leads_query(current_user, status_filter="RECUPERABLE", q=q, campaign_ids=campaign_id,
                              advisor_id=advisor_id, initial_product_id=initial_product_id, created_on=created_on)
         .order_by(Lead.updated_at),
         page,
@@ -276,6 +289,31 @@ def dismiss_notification(notification_id: str, current_user: User = Depends(get_
 def get_lead(lead_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
     lead = lead_or_404(lead_id, db)
     assert_access(lead, current_user)
+    return lead_response(lead, db)
+
+
+@router.patch("/{lead_id}")
+def update_lead(lead_id: str, payload: LeadUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    lead = lead_or_404(lead_id, db)
+    assert_access(lead, current_user)
+    changes = payload.model_dump(exclude_unset=True)
+    if "initial_product_id" in changes and changes["initial_product_id"]:
+        product = db.get(Product, changes["initial_product_id"])
+        if product is None or not product.is_active:
+            raise HTTPException(status_code=422, detail="Initial product must exist and be active")
+    before = {field: getattr(lead, field) for field in changes}
+    for field, value in changes.items():
+        if field == "email" and value is not None:
+            value = str(value).lower()
+        elif field in {"full_name", "dni", "phone", "condition", "notes"} and value is not None:
+            value = value.strip() or None
+        if field in {"full_name", "phone"} and not value:
+            raise HTTPException(status_code=422, detail=f"{field} cannot be blank")
+        setattr(lead, field, value)
+        changes[field] = value
+    record_audit(db, actor_id=current_user.id, entity_type="lead", entity_id=lead.id, action="UPDATED", before=before, after=changes)
+    db.commit()
+    db.refresh(lead)
     return lead_response(lead, db)
 
 
@@ -416,8 +454,8 @@ def convert_lead(lead_id: str, payload: LeadConversionCreate, current_user: User
         if any(rule is None for rule in rules.values()):
             raise HTTPException(status_code=422, detail="Each product needs an effective repurchase rule on the sale date")
         if customer.acquisition_channel is None and not confirmed_sale_exists(customer.id, db):
-            channel = {"REDES_SOCIALES": "DIGITAL", "COMERCIAL_TV": "TV", "REFERIDO": "OTROS"}[lead.source]
-            customer.acquisition_channel, customer.acquisition_channel_detail = channel, "REFERIDO" if channel == "OTROS" else None
+            campaign = db.get(Campaign, lead.campaign_id)
+            customer.acquisition_channel, customer.acquisition_channel_detail = "OTROS", campaign.name if campaign else None
         if lead.assigned_advisor_id is None:
             raise HTTPException(status_code=422, detail="Lead must be assigned to an advisor before conversion")
         sale = Sale(customer_id=customer.id, advisor_id=lead.assigned_advisor_id or current_user.id, sale_date=payload.sale_date,

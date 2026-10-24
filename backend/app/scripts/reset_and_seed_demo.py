@@ -163,7 +163,7 @@ def seed_demo_45(db: Session, advisors: list[User], today: date) -> None:
     )
     repurchase = ContactTypification(code="PEDIDO", name="Pedido", is_active=True)
     repurchase_child = ContactTypification(
-        parent_id=None, code="PEDIDO_CONFIRMADO", name="Pedido de recompra confirmado", is_active=True, lead_outcome="EFECTIVO",
+        parent_id=None, code="PEDIDO_CONFIRMADO", name="Pedido de recompra confirmado", is_active=True, lead_outcome="EFECTIVO", scope="LEADS_ONLY",
     )
     roots = [follow_up, no_contact, close, repurchase]
     db.add_all(roots)

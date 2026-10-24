@@ -49,6 +49,12 @@ function formatAlertDate(value?: string | null, withTime = false) {
     ...(withTime ? { timeStyle: "short" } : {}),
   }).format(new Date(withTime ? value : `${value}T00:00:00`));
 }
+function localDateTimeWithOffset(date: string, time: string) {
+  const local = new Date(`${date}T${time}`);
+  const offset = -local.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  return `${date}T${time}:00${sign}${String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0")}:${String(Math.abs(offset) % 60).padStart(2, "0")}`;
+}
 
 function latestAlertAttempt(alert: ManagedAlert) {
   return alert.contact_attempts[alert.contact_attempts.length - 1];
@@ -71,20 +77,6 @@ function daysOverdue(date?: string | null) {
   return date
     ? Math.max(0, Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000))
     : 0;
-}
-
-function advisorInitials(name: string) {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
-}
-
-function advisorAvatarTone(name: string) {
-  return name.charCodeAt(0) % 5;
 }
 
 export const Dashboard = memo(function Dashboard({
@@ -114,7 +106,7 @@ export const Dashboard = memo(function Dashboard({
   });
   const [advisorMetrics, setAdvisorMetrics] = useState<AdvisorSalesMetrics | null>(null);
   const [upcomingAlerts, setUpcomingAlerts] = useState<UpcomingAlert[]>([]);
-  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [selectedAlert, setSelectedAlert] = useState<ManagedAlert | null>(null);
   const [typifications, setTypifications] = useState<TypificationTree[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [parentTypificationId, setParentTypificationId] = useState("");
@@ -148,7 +140,7 @@ export const Dashboard = memo(function Dashboard({
     if (user.role !== "ASESOR") {
       loadMetrics().catch(() => {});
     }
-    api<TypificationTree[]>("/configuration/contact-typifications/tree")
+    api<TypificationTree[]>("/configuration/contact-typifications/tree?flow=ALERTS")
       .then(setTypifications)
       .catch(() => {});
     listAll<Product>("/products")
@@ -190,7 +182,7 @@ export const Dashboard = memo(function Dashboard({
   const selectedChild = childTypifications.find((item) => item.id === childTypificationId);
   const selectedTypification =
     selectedChild || (selectedParent?.children.length === 0 ? selectedParent : undefined);
-  const openAlert = async (alert: Alert) => {
+  const openAlert = async (alert: Alert | ManagedAlert) => {
     setManagementError("");
     setManagementSuccess("");
     setParentTypificationId("");
@@ -212,9 +204,9 @@ export const Dashboard = memo(function Dashboard({
           : "La alerta no tiene DNI registrado.",
       );
     }
-    setSelectedAlert(alert);
+    setSelectedAlert("contact_attempts" in alert ? alert : { ...alert, contact_attempts: [] });
     try {
-      setSelectedAlert(await api<Alert>(`/alerts/${alert.id}`));
+      setSelectedAlert(await api<ManagedAlert>(`/alerts/${alert.id}`));
     } catch {
       // The inbox payload remains sufficient to inspect and manage the alert.
     }
@@ -230,7 +222,7 @@ export const Dashboard = memo(function Dashboard({
   };
   useEffect(() => {
     if (!alertToManageId) return;
-    api<Alert>(`/alerts/${alertToManageId}`)
+    api<ManagedAlert>(`/alerts/${alertToManageId}`)
       .then(openAlert)
       .catch(() => {})
       .finally(onAlertOpened);
@@ -278,7 +270,7 @@ export const Dashboard = memo(function Dashboard({
             note: form.get("note") || undefined,
             next_action_date: nextActionDate,
             next_action_at: nextActionDate && nextActionTime
-              ? new Date(`${nextActionDate}T${nextActionTime}`).toISOString()
+              ? localDateTimeWithOffset(nextActionDate, nextActionTime)
               : undefined,
           }),
         });
@@ -457,40 +449,25 @@ export const Dashboard = memo(function Dashboard({
           <article className="panel advisors">
             <h2>Ranking de asesores</h2>
             {metrics?.advisor_ranking.length ? (
-              <>
-                <div className="ranking-table-header" aria-hidden="true">
-                  <span className="ranking-revenue-head">
-                    <span>Regular</span>
-                    <span>Recompra</span>
-                    <span>Total</span>
-                  </span>
-                </div>
-                <ol className="advisor-ranking">
-                  {metrics.advisor_ranking.slice(0, 5).map((advisor, index) => (
-                    <li key={advisor.advisor_id}>
-                      <span className="ranking-position">{index + 1}</span>
-                      <span
-                        className={`profile-initials advisor-avatar advisor-avatar-${advisorAvatarTone(advisor.advisor_name)}`}
-                        aria-hidden="true"
-                      >
-                        {advisorInitials(advisor.advisor_name)}
-                      </span>
-                      <span className="ranking-advisor">
-                        <b>{advisor.advisor_name}</b>
-                        <small>
-                          {advisor.confirmed_repurchases} recompras · {advisor.managed_alerts}{" "}
-                          alertas gestionadas
-                        </small>
-                      </span>
-                      <span className="ranking-revenue">
-                        <b>{formatCurrency(advisor.regular_revenue)}</b>
-                        <b>{formatCurrency(advisor.repurchase_revenue)}</b>
-                        <b>{formatCurrency(advisor.total_revenue)}</b>
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              </>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Asesor</th><th>Recompras</th><th>Alertas gestionadas</th><th>Ingreso regular</th><th>Ingreso recompra</th><th>Ingreso total</th></tr>
+                  </thead>
+                  <tbody>
+                    {metrics.advisor_ranking.map((advisor) => (
+                      <tr key={advisor.advisor_id}>
+                        <td><b>{advisor.advisor_name}</b></td>
+                        <td>{advisor.confirmed_repurchases}</td>
+                        <td>{advisor.managed_alerts}</td>
+                        <td>{formatCurrency(advisor.regular_revenue)}</td>
+                        <td>{formatCurrency(advisor.repurchase_revenue)}</td>
+                        <td><b>{formatCurrency(advisor.total_revenue)}</b></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             ) : (
               <p>No hay actividad de asesores en el periodo.</p>
             )}
@@ -989,6 +966,12 @@ export const Dashboard = memo(function Dashboard({
               <p>
                 <span>Próxima acción</span>
                 <strong>{formatAlertDate(selectedAlert.next_action_at || selectedAlert.next_action_date, Boolean(selectedAlert.next_action_at))}</strong>
+              </p>
+            )}
+            {selectedAlert.status === "REPROGRAMADO" && latestAlertAttempt(selectedAlert)?.note && (
+              <p className="alert-reprogramming-note">
+                <span>Nota de reprogramación</span>
+                <strong>{latestAlertAttempt(selectedAlert)?.note}</strong>
               </p>
             )}
           </section>

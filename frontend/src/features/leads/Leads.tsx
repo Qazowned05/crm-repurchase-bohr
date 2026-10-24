@@ -7,10 +7,12 @@ import { SearchSelect } from "../../components/SearchSelect";
 import { api, download, listAll, upload } from "../../services/api";
 import type {
   Customer,
+  Campaign,
   Lead,
   LeadActivity,
   Paged,
   Product,
+  Sale,
   TypificationTree,
   User,
 } from "../../services/types";
@@ -36,12 +38,6 @@ const columns: Array<{ key: BoardStatus; title: string }> = [
   { key: "RECUPERABLE", title: "Recuperables" },
   { key: "CERRADO", title: "Cerrados" },
 ];
-const sourceOptions = [
-  ["", "Todos los orígenes"],
-  ["REDES_SOCIALES", "Redes sociales"],
-  ["COMERCIAL_TV", "Comercial TV"],
-  ["REFERIDO", "Referido"],
-] as const;
 
 function emptyPage(): Paged<Lead> {
   return { items: [], page: 1, page_size: BOARD_SIZE, total: 0, pages: 0 };
@@ -55,6 +51,9 @@ function formatDate(value?: string | null, time = false) {
     dateStyle: "medium",
     ...(time ? { timeStyle: "short" } : {}),
   }).format(new Date(time ? value : `${value}T00:00:00`));
+}
+function formatCurrency(value?: string | null) {
+  return new Intl.NumberFormat("es-PE", { style: "currency", currency: "PEN" }).format(Number(value || 0));
 }
 function localDate() {
   const now = new Date();
@@ -126,7 +125,7 @@ function PeriodPicker({ from, to, onChange }: { from: string; to: string; onChan
           </div>
           <footer>
             <button type="button" className="secondary" onClick={() => setOpen(false)}>Cancelar</button>
-            <button type="button" disabled={!draftFrom || !draftTo} onClick={() => { onChange(draftFrom, draftTo); setOpen(false); }}>Aplicar periodo</button>
+            <button type="button" disabled={!draftFrom} onClick={() => { onChange(draftFrom, draftTo || draftFrom); setOpen(false); }}>Aplicar periodo</button>
           </footer>
         </div>
       )}
@@ -140,6 +139,22 @@ function closureLabel(lead: Lead) {
   return lead.status === "CERRADO_EFECTIVO"
     ? "Venta conseguida"
     : lead.latest_typification_name || "Cerrado sin conversión";
+}
+function localDateTimeWithOffset(date: string, time: string) {
+  const local = new Date(`${date}T${time}`);
+  const offset = -local.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0");
+  const minutes = String(Math.abs(offset) % 60).padStart(2, "0");
+  return `${date}T${time}:00${sign}${hours}:${minutes}`;
+}
+function campaignTextColor(color: string) {
+  const [red, green, blue] = [color.slice(1, 3), color.slice(3, 5), color.slice(5, 7)].map((value) => Number.parseInt(value, 16));
+  return red * 0.299 + green * 0.587 + blue * 0.114 > 170 ? "#162a3a" : "#ffffff";
+}
+function leadNameParts(name: string) {
+  const parts = name.trim().split(/\s+/);
+  return { first_names: parts.slice(0, -1).join(" ") || parts[0] || "", last_names: parts.length > 1 ? parts.at(-1) || "" : "" };
 }
 function FlowIcon({ status }: { status: BoardStatus }) {
   const paths = {
@@ -169,7 +184,7 @@ function summaryTotal(summary: BoardSummary, status: BoardStatus, fallback: numb
   return typeof value === "number" ? value : (value?.total ?? fallback);
 }
 
-export function Leads({ user }: { user: User }) {
+export function Leads({ user, leadToManageId, onLeadOpened }: { user: User; leadToManageId?: string | null; onLeadOpened?: () => void }) {
   const [board, setBoard] = useState<Record<BoardStatus, Paged<Lead>>>({
     PENDIENTE: emptyPage(),
     AGENDADO: emptyPage(),
@@ -180,7 +195,7 @@ export function Leads({ user }: { user: User }) {
   const [loading, setLoading] = useState<Partial<Record<BoardStatus, boolean>>>({});
   const [filters, setFilters] = useState({
     q: "",
-    source: "",
+    campaign_ids: "",
     advisor_id: "",
     initial_product_id: "",
     activity_from: localDate(),
@@ -189,6 +204,7 @@ export function Leads({ user }: { user: User }) {
     typification_id: "",
   });
   const [products, setProducts] = useState<Product[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [advisors, setAdvisors] = useState<User[]>([]);
   const [typifications, setTypifications] = useState<TypificationTree[]>([]);
@@ -203,10 +219,9 @@ export function Leads({ user }: { user: User }) {
   const [conversion, setConversion] = useState<ConversionContext | null>(null);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [customerId, setCustomerId] = useState("");
-  const [customerPayload, setCustomerPayload] = useState<Record<string, string | undefined> | null>(
-    null,
-  );
+  const [selectedProductId, setSelectedProductId] = useState("");
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
+  const [convertedSale, setConvertedSale] = useState<Sale | null>(null);
   const [error, setError] = useState("");
 
   const queryFor = (status: BoardStatus, page: number, active = filters) => {
@@ -216,7 +231,12 @@ export function Leads({ user }: { user: User }) {
       page_size: String(BOARD_SIZE),
     });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
-    if (status === "AGENDADO" && !active.next_action) query.set("next_action", "DUE");
+    if (
+      status === "AGENDADO" &&
+      !active.next_action &&
+      active.activity_from === localDate() &&
+      active.activity_to === localDate()
+    ) query.set("next_action", "DUE");
     return query;
   };
   const loadColumn = async (status: BoardStatus, page = 1, active = filters, append = false) => {
@@ -255,12 +275,14 @@ export function Leads({ user }: { user: User }) {
     loadBoard().catch(() => setError("No fue posible cargar el tablero de leads."));
     Promise.all([
       listAll<Product>("/products"),
+      listAll<Campaign>("/campaigns?active_only=true"),
       api<Customer[]>("/customers/sale-options"),
-      api<TypificationTree[]>("/configuration/contact-typifications/tree"),
+        api<TypificationTree[]>("/configuration/contact-typifications/tree?flow=LEADS"),
       user.role === "ASESOR" ? Promise.resolve([]) : api<User[]>("/users/advisors"),
     ])
-      .then(([productRows, customerRows, typificationRows, advisorRows]) => {
+      .then(([productRows, campaignRows, customerRows, typificationRows, advisorRows]) => {
         setProducts(productRows.filter((product) => product.is_active));
+        setCampaigns(campaignRows);
         setCustomers(customerRows);
         setTypifications(typificationRows);
         setAdvisors(advisorRows);
@@ -273,16 +295,27 @@ export function Leads({ user }: { user: User }) {
     setParentId("");
     setChildId("");
     setConversion(null);
-    setCustomerPayload(null);
     setCustomerId("");
+    setSelectedProductId(lead.initial_product_id || "");
     setLines([{ product_id: "", quantity: 1 }]);
+    setConvertedSale(null);
     setError("");
     try {
       await loadActivities(lead.id);
     } catch {
       setActivities(emptyActivityPage());
     }
+    if (lead.converted_sale_id) {
+      api<Sale>(`/sales/${lead.converted_sale_id}`).then(setConvertedSale).catch(() => setConvertedSale(null));
+    }
   };
+  useEffect(() => {
+    if (!leadToManageId) return;
+    api<Lead>(`/leads/${leadToManageId}`)
+      .then(openLead)
+      .catch(() => setError("No fue posible abrir el lead de la notificación."));
+    onLeadOpened?.();
+  }, [leadToManageId]);
   const loadActivities = async (leadId: string, page = 1, append = false) => {
     const result = await api<Paged<LeadActivity>>(
       `/leads/${leadId}/activities?page=${page}&page_size=${ACTIVITY_PAGE_SIZE}`,
@@ -328,7 +361,7 @@ export function Leads({ user }: { user: User }) {
           typification_id: typification.id,
           note: note || undefined,
           next_action_date: date || undefined,
-          next_action_at: date && time ? new Date(`${date}T${time}`).toISOString() : undefined,
+          next_action_at: date && time ? localDateTimeWithOffset(date, time) : undefined,
         }),
       });
       setParentId("");
@@ -343,7 +376,7 @@ export function Leads({ user }: { user: User }) {
     if (
       !selected ||
       !conversion ||
-      (!customerId && !customerPayload) ||
+      !customerId ||
       lines.some(
         (line) => !line.product_id || !Number.isInteger(line.quantity) || line.quantity < 1,
       )
@@ -357,8 +390,7 @@ export function Leads({ user }: { user: User }) {
           typification_id: conversion.typificationId,
           channel: conversion.channel,
           activity_note: conversion.activityNote || undefined,
-          customer_id: customerPayload ? undefined : customerId,
-          customer: customerPayload || undefined,
+          customer_id: customerId,
           customer_condition: form.get("customer_condition") || undefined,
           sale_date: form.get("sale_date"),
           items: lines,
@@ -386,6 +418,28 @@ export function Leads({ user }: { user: User }) {
       await refreshSelected(selected.id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No fue posible asignar el lead.");
+    }
+  };
+  const saveLeadDetails = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selected) return;
+    const form = new FormData(event.currentTarget);
+    try {
+      await api(`/leads/${selected.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          full_name: form.get("full_name"),
+          dni: form.get("dni") || null,
+          phone: form.get("phone"),
+          email: form.get("email") || null,
+          condition: form.get("condition") || null,
+          initial_product_id: form.get("initial_product_id") || null,
+          notes: form.get("notes") || null,
+        }),
+      });
+      await refreshSelected(selected.id);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No fue posible actualizar el lead.");
     }
   };
 
@@ -448,18 +502,15 @@ export function Leads({ user }: { user: User }) {
               />
             </label>
             <label>
-              Origen
+              Campaña
               <select
-                value={filters.source}
+                value={filters.campaign_ids}
                 onChange={(event) =>
-                  setFilters((value) => ({ ...value, source: event.target.value }))
+                  setFilters((value) => ({ ...value, campaign_ids: event.target.value }))
                 }
               >
-                {sourceOptions.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
+                <option value="">Todas las campañas</option>
+                {campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}
               </select>
             </label>
             {user.role !== "ASESOR" && (
@@ -499,7 +550,11 @@ export function Leads({ user }: { user: User }) {
             <PeriodPicker
               from={filters.activity_from}
               to={filters.activity_to}
-              onChange={(activity_from, activity_to) => setFilters((value) => ({ ...value, activity_from, activity_to }))}
+              onChange={(activity_from, activity_to) => {
+                const nextFilters = { ...filters, activity_from, activity_to };
+                setFilters(nextFilters);
+                void loadBoard(nextFilters).catch(() => setError("No fue posible filtrar el tablero."));
+              }}
             />
             <label>
               Próxima acción
@@ -533,8 +588,8 @@ export function Leads({ user }: { user: User }) {
               </select>
             </label>
             <button>Aplicar filtros</button>
-          </div>
-        </form>
+           </div>
+         </form>
         <div className="lead-kanban">
           {columns.map(({ key, title }) => {
             const page = board[key];
@@ -562,7 +617,10 @@ export function Leads({ user }: { user: User }) {
                     >
                       <div className="lead-card-heading">
                         <b>{lead.full_name}</b>
-                        <span className="lead-source">{lead.source.replaceAll("_", " ")}</span>
+                        {(() => {
+                          const color = campaigns.find((campaign) => campaign.id === lead.campaign_id)?.color || "#176b87";
+                          return <span className="lead-source" style={{ backgroundColor: color, color: campaignTextColor(color) }}>{lead.campaign_name || "Campaña"}</span>;
+                        })()}
                       </div>
                       {lead.status === "PENDIENTE" && lead.reassigned_from_recovery && (
                         <span className="lead-reassigned">Reasignado desde recuperación</span>
@@ -585,6 +643,10 @@ export function Leads({ user }: { user: User }) {
                           {products.find((product) => product.id === lead.initial_product_id)?.name ||
                             "Sin producto de interés"}
                         </small>
+                      <div className="lead-card-date">
+                        <span>{lead.reassigned_from_recovery && lead.reassigned_at ? "Reasignado" : "Registrado"}</span>
+                        <b>{formatDate(lead.reassigned_from_recovery && lead.reassigned_at ? lead.reassigned_at : lead.created_at, true)}</b>
+                      </div>
                       {lead.next_action_date && (
                         <div className="lead-card-action">
                           <span>Próxima acción</span>
@@ -636,7 +698,7 @@ export function Leads({ user }: { user: User }) {
                     full_name: form.get("full_name"),
                     phone: form.get("phone"),
                     email: form.get("email") || undefined,
-                    source: form.get("source"),
+                    campaign_id: form.get("campaign_id"),
                     initial_product_id: form.get("initial_product_id") || undefined,
                     notes: form.get("notes") || undefined,
                     assigned_advisor_id:
@@ -660,21 +722,18 @@ export function Leads({ user }: { user: User }) {
           >
             <div className="form-grid">
               <label>
-                Nombre completo
-                <input name="full_name" required minLength={2} />
+                Nombre completo (opcional)
+                <input name="full_name" />
               </label>
               <label>
                 Teléfono
                 <input name="phone" required minLength={6} />
               </label>
               <label>
-                Origen
-                <select name="source" defaultValue="REDES_SOCIALES">
-                  {sourceOptions.slice(1).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
+                Campaña
+                <select name="campaign_id" required defaultValue="">
+                  <option value="" disabled>Selecciona una campaña</option>
+                  {campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}
                 </select>
               </label>
               <label>
@@ -695,8 +754,8 @@ export function Leads({ user }: { user: User }) {
               {user.role !== "ASESOR" && (
                 <label>
                   Asesor responsable
-                  <select name="assigned_advisor_id">
-                    <option value="">Asignar después</option>
+                  <select name="assigned_advisor_id" required defaultValue="">
+                    <option value="" disabled>Selecciona un asesor</option>
                     {advisors.map((advisor) => (
                       <option key={advisor.id} value={advisor.id}>
                         {advisor.full_name}
@@ -731,7 +790,7 @@ export function Leads({ user }: { user: User }) {
             setImportPreview(null);
           }}
         >
-          <p>Descarga la plantilla, asigna cada fila mediante el correo del asesor y carga el archivo. Los leads se crearán como pendientes.</p>
+          <p>Obligatorios: teléfono, campaña activa y correo del asesor. Nombre, correo, producto y notas son opcionales. Los leads se crearán como pendientes.</p>
           <div className="lead-import-actions">
             <button type="button" className="secondary" onClick={() => void download("/imports/templates/leads", "plantilla_leads.xlsx")}>
               Descargar plantilla
@@ -796,7 +855,7 @@ export function Leads({ user }: { user: User }) {
         </Modal>
       )}
       {selected && (
-        <Modal title={`Gestionar lead: ${selected.full_name}`} onClose={() => setSelected(null)}>
+        <Modal title={`${selected.status === "CERRADO_EFECTIVO" ? "Detalle" : "Gestionar"} lead: ${selected.full_name}`} onClose={() => setSelected(null)}>
           <div className="alert-summary alert-context">
             <div>
               <span>Contacto</span>
@@ -817,8 +876,36 @@ export function Leads({ user }: { user: User }) {
                 )}
               </b>
             </div>
-          </div>
-          {!conversion && !selected.status.startsWith("CERRADO") && (
+           </div>
+            {selected.status === "CERRADO_EFECTIVO" ? (
+              <section className="lead-readonly-details">
+                <h3>Información del lead</h3>
+                <dl>
+                  <div><dt>Nombre</dt><dd>{selected.full_name}</dd></div>
+                  <div><dt>DNI</dt><dd>{selected.dni || "Sin registro"}</dd></div>
+                  <div><dt>Teléfono</dt><dd>{selected.phone}</dd></div>
+                  <div><dt>Correo</dt><dd>{selected.email || "Sin registro"}</dd></div>
+                  <div><dt>Producto de interés</dt><dd>{products.find((product) => product.id === selected.initial_product_id)?.name || "Sin registro"}</dd></div>
+                  <div><dt>Condición</dt><dd>{selected.condition || "Sin registro"}</dd></div>
+                  <div className="notes"><dt>Notas</dt><dd>{selected.notes || "Sin registro"}</dd></div>
+                </dl>
+                <h3>Venta registrada</h3>
+                {convertedSale ? <div className="lead-sale-detail"><dl><div><dt>Fecha de venta</dt><dd>{formatDate(convertedSale.sale_date)}</dd></div><div><dt>Asesor</dt><dd>{convertedSale.advisor_full_name || selected.assigned_advisor_name || "Sin registro"}</dd></div><div><dt>Cliente</dt><dd>{`${convertedSale.customer_first_names || ""} ${convertedSale.customer_last_names || ""}`.trim() || "Sin registro"}</dd></div></dl><table><thead><tr><th>Producto</th><th>Cantidad</th><th>Precio</th><th>Subtotal</th></tr></thead><tbody>{convertedSale.items.map((item) => <tr key={item.id}><td>{item.product_name || item.product_code || "Producto"}</td><td>{item.quantity}</td><td>{formatCurrency(item.unit_price)}</td><td>{formatCurrency(String(Number(item.unit_price || 0) * item.quantity))}</td></tr>)}</tbody></table><b className="lead-sale-total">Total: {formatCurrency(String(convertedSale.items.reduce((total, item) => total + Number(item.unit_price || 0) * item.quantity, 0)))}</b></div> : <p>Cargando detalle de venta...</p>}
+              </section>
+            ) : <form className="alert-management-form" onSubmit={saveLeadDetails}>
+             <h3>Información del lead</h3>
+             <div className="form-grid">
+                <label>Nombre completo<input name="full_name" defaultValue={selected.full_name} required maxLength={255} /></label>
+                <label>DNI<input name="dni" defaultValue={selected.dni || ""} inputMode="numeric" maxLength={20} /></label>
+                <label>Teléfono<input name="phone" defaultValue={selected.phone} required minLength={6} maxLength={30} /></label>
+                <label>Correo<input name="email" type="email" defaultValue={selected.email || ""} /></label>
+                <label>Producto de interés<SearchSelect name="initial_product_id" options={products.map((product) => ({ value: product.id, label: `${product.code} - ${product.name}` }))} value={selectedProductId} onChange={setSelectedProductId} placeholder="Busca un producto" /></label>
+               <label>Enfermedad o condición<textarea name="condition" defaultValue={selected.condition || ""} maxLength={500} /></label>
+               <label className="notes">Notas<textarea name="notes" defaultValue={selected.notes || ""} maxLength={4000} /></label>
+             </div>
+              <footer><button>Guardar información</button></footer>
+            </form>}
+           {!conversion && !selected.status.startsWith("CERRADO") && (
             <form className="alert-management-form" onSubmit={saveActivity}>
               <div className="form-grid">
                 <label>
@@ -909,9 +996,8 @@ export function Leads({ user }: { user: User }) {
                       value={customerId}
                       onChange={(value) => {
                         setCustomerId(value);
-                        setCustomerPayload(null);
                       }}
-                      required={!customerPayload}
+                      required
                       placeholder="Busca por nombre o DNI"
                       actionLabel="Crear cliente"
                       onAction={() => setCustomerModalOpen(true)}
@@ -943,9 +1029,6 @@ export function Leads({ user }: { user: User }) {
                     />
                   </label>
                 </div>
-                {customerPayload && (
-                  <p className="success-message">Nuevo cliente listo para registrar con esta venta.</p>
-                )}
                 <div className="sale-lines">
                   <h3>Productos</h3>
                   {lines.map((line, index) => (
@@ -1043,7 +1126,7 @@ export function Leads({ user }: { user: User }) {
               </footer>
             </form>
           )}
-          <section className="lead-history">
+          {selected.status !== "CERRADO_EFECTIVO" && <section className="lead-history">
             <div className="lead-history-heading">
               <h3>Historial de atenciones</h3>
               {activities.total > 0 && <span>{activities.total} registros</span>}
@@ -1078,8 +1161,8 @@ export function Leads({ user }: { user: User }) {
                 Ver 10 atenciones anteriores
               </button>
             )}
-          </section>
-          {user.role !== "ASESOR" && (
+          </section>}
+          {selected.status !== "CERRADO_EFECTIVO" && user.role !== "ASESOR" && (
             <footer>
               <button
                 type="button"
@@ -1106,12 +1189,21 @@ export function Leads({ user }: { user: User }) {
       {customerModalOpen && (
         <CustomerModal
           customer={null}
+          initial={selected ? {
+            dni: selected.dni || "",
+            ...leadNameParts(selected.full_name),
+            phone: selected.phone,
+            email: selected.email || "",
+            condition: selected.condition || "",
+            responsible_advisor_id: selected.assigned_advisor_id || "",
+          } : undefined}
           role={user.role}
           title="Crear cliente para conversión"
           onClose={() => setCustomerModalOpen(false)}
           onSave={async (data) => {
-            setCustomerPayload(data);
-            setCustomerId("");
+            const customer = await api<Customer>("/customers", { method: "POST", body: JSON.stringify(data) });
+            setCustomers((rows) => [...rows, customer]);
+            setCustomerId(customer.id);
           }}
         />
       )}

@@ -1,10 +1,10 @@
 import csv
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from io import StringIO
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
@@ -20,11 +20,113 @@ from app.modules.auth.models import User
 from app.modules.customers.models import Customer
 from app.modules.configuration.models import ContactTypification
 from app.modules.products.models import Product
+from app.modules.campaigns.models import Campaign
+from app.modules.leads.models import Lead
 from app.modules.sales.models import Sale, SaleItem
 from app.modules.supervision.models import AlertAssignmentHistory
 from app.modules.reports.schemas import AlertsReportResponse, MetricsResponse, SalesReportResponse
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
+
+
+@router.get("/leads-metrics")
+def lead_metrics(
+    start_date: date | None = None,
+    end_date: date | None = None,
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")),
+    db: Session = Depends(get_db),
+) -> dict:
+    today = date.today()
+    start_date = start_date or today.replace(day=1)
+    end_date = end_date or today
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date cannot exceed end_date")
+
+    start_at = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    end_at = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    period_leads = list(db.scalars(select(Lead).where(Lead.created_at >= start_at, Lead.created_at < end_at)))
+    campaigns = {campaign.id: campaign for campaign in db.scalars(select(Campaign))}
+    advisors = {advisor.id: advisor.full_name for advisor in db.scalars(select(User).where(User.role == "ASESOR"))}
+
+    effective = [lead for lead in period_leads if lead.status == "CERRADO_EFECTIVO"]
+    recoverable = [lead for lead in period_leads if lead.status == "RECUPERABLE"]
+    by_campaign: dict[str, dict] = {}
+    by_advisor: dict[str, dict] = {}
+    for lead in period_leads:
+        campaign = by_campaign.setdefault(lead.campaign_id, {
+            "campaign_id": lead.campaign_id,
+            "campaign_name": campaigns[lead.campaign_id].name if lead.campaign_id in campaigns else "Sin campaña",
+            "campaign_color": campaigns[lead.campaign_id].color if lead.campaign_id in campaigns else "#176b87",
+            "leads": 0,
+            "effective": 0,
+            "recoverable": 0,
+        })
+        campaign["leads"] += 1
+        campaign["effective"] += lead.status == "CERRADO_EFECTIVO"
+        campaign["recoverable"] += lead.status == "RECUPERABLE"
+        if lead.assigned_advisor_id:
+            advisor = by_advisor.setdefault(lead.assigned_advisor_id, {
+                "advisor_id": lead.assigned_advisor_id,
+                "advisor_name": advisors.get(lead.assigned_advisor_id, "Sin asignar"),
+                "leads": 0,
+                "effective": 0,
+                "recoverable": 0,
+                "sales": 0,
+                "revenue": Decimal("0"),
+            })
+            advisor["leads"] += 1
+            advisor["effective"] += lead.status == "CERRADO_EFECTIVO"
+            advisor["recoverable"] += lead.status == "RECUPERABLE"
+
+    sales = list(db.scalars(select(Sale).join(Lead, Lead.converted_sale_id == Sale.id).where(
+        Sale.status == "CONFIRMADA",
+        Sale.sale_date >= start_date, Sale.sale_date <= end_date,
+    )))
+    sale_totals: dict[str, Decimal] = {sale.id: Decimal("0") for sale in sales}
+    if sale_totals:
+        for item in db.scalars(select(SaleItem).where(SaleItem.sale_id.in_(sale_totals))):
+            sale_totals[item.sale_id] += (item.unit_price or Decimal("0")) * item.quantity
+    lead_by_sale = {lead.converted_sale_id: lead for lead in db.scalars(select(Lead).where(Lead.converted_sale_id.in_(sale_totals))) } if sale_totals else {}
+    for sale in sales:
+        lead = lead_by_sale.get(sale.id)
+        if lead and lead.assigned_advisor_id:
+            advisor = by_advisor.setdefault(lead.assigned_advisor_id, {
+                "advisor_id": lead.assigned_advisor_id,
+                "advisor_name": advisors.get(lead.assigned_advisor_id, "Sin asignar"),
+                "leads": 0,
+                "effective": 0,
+                "recoverable": 0,
+                "sales": 0,
+                "revenue": Decimal("0"),
+            })
+            advisor["sales"] += 1
+            advisor["revenue"] += sale_totals[sale.id]
+
+    pipeline = list(db.scalars(select(Lead).where(Lead.status.in_({"PENDIENTE", "AGENDADO", "RECUPERABLE"}))))
+    daily: dict[date, dict] = {}
+    for lead in period_leads:
+        day = lead.created_at.astimezone(timezone.utc).date()
+        row = daily.setdefault(day, {"date": day.isoformat(), "leads": 0, "effective": 0})
+        row["leads"] += 1
+        row["effective"] += lead.status == "CERRADO_EFECTIVO"
+    total_leads = len(period_leads)
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "total_leads": total_leads,
+        "effective_leads": len(effective),
+        "recoverable_leads": len(recoverable),
+        "conversion_rate": len(effective) / total_leads if total_leads else 0,
+        "recoverable_rate": len(recoverable) / total_leads if total_leads else 0,
+        "pending_leads": sum(lead.status == "PENDIENTE" for lead in pipeline),
+        "scheduled_leads": sum(lead.status == "AGENDADO" for lead in pipeline),
+        "lead_sales": len(sales),
+        "lead_revenue": sum(sale_totals.values(), Decimal("0")),
+        "average_ticket": sum(sale_totals.values(), Decimal("0")) / len(sales) if sales else Decimal("0"),
+        "campaigns": sorted(by_campaign.values(), key=lambda row: (-row["leads"], row["campaign_name"])),
+        "advisors": sorted(by_advisor.values(), key=lambda row: (-row["revenue"], -row["effective"], row["advisor_name"])),
+        "daily": [daily[key] for key in sorted(daily)],
+    }
 
 
 def excel_value(value: object) -> object:
