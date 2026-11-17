@@ -12,7 +12,7 @@ from app.core.pagination import paginate_items
 from app.dependencies import require_roles
 from app.modules.alerts.models import Alert, AlertContactAttempt, AlertNotification
 from app.modules.alerts.schemas import AlertResponse
-from app.modules.alerts.service import RECOVERABLE_FINAL_STATUSES, active_alerts_query, alert_response, recovery_alerts_query
+from app.modules.alerts.service import FINAL_STATUSES, RECOVERABLE_FINAL_STATUSES, active_alerts_query, alert_response, recovery_alerts_query
 from app.modules.auth.models import User
 from app.modules.configuration.models import ContactTypification
 from app.modules.customers.models import Customer
@@ -303,6 +303,22 @@ def assign_recovery_alert(alert_id: str, payload: AssignmentCreate, current_user
         raise HTTPException(status_code=409, detail="Only recoverable alerts can be assigned")
     record_alert_assignment(alert, payload.assigned_advisor_id, payload.reason.strip(), current_user.id, db)
     alert.status, alert.closed_at = "REASIGNADO", None
+    db.commit()
+    db.refresh(alert)
+    return alert_response(alert, db)
+
+
+@router.post("/alerts/{alert_id}/reassign", response_model=AlertResponse)
+def reassign_alert(alert_id: str, payload: AssignmentCreate, current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db)) -> dict:
+    if payload.assigned_advisor_id is None:
+        raise HTTPException(status_code=422, detail="An active advisor is required")
+    alert = alert_or_404(alert_id, db)
+    if alert.status == "ELIMINADA":
+        raise HTTPException(status_code=409, detail="Deleted alerts cannot be reassigned")
+    validate_responsible(payload.assigned_advisor_id, db)
+    record_alert_assignment(alert, payload.assigned_advisor_id, payload.reason.strip(), current_user.id, db)
+    if alert.status not in FINAL_STATUSES:
+        alert.status, alert.closed_at = "REASIGNADO", None
     db.commit()
     db.refresh(alert)
     return alert_response(alert, db)

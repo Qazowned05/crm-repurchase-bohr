@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Modal } from "../../components/Modal";
+import { CrudModal } from "../../components/CrudModal";
 import { SearchSelect } from "../../components/SearchSelect";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
 import { api, listAll } from "../../services/api";
@@ -520,7 +521,7 @@ function AlertManagement({
   );
 }
 
-export function AlertRegister() {
+export function AlertRegister({ user }: { user: User }) {
   const [data, setData] = useState<Paged<ManagedAlert>>({
     items: [],
     page: 1,
@@ -545,6 +546,7 @@ export function AlertRegister() {
     advisor_id: "",
   });
   const [error, setError] = useState("");
+  const [reassigning, setReassigning] = useState<ManagedAlert | null>(null);
   const load = (page = data.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
     Object.entries(active).forEach(([key, value]) => value && query.set(key, value));
@@ -881,6 +883,11 @@ export function AlertRegister() {
                         </td>
                         <td>
                           <div className="row-actions">
+                            {user.role !== "ASESOR" && (
+                              <button className="link" onClick={(event) => { event.stopPropagation(); setReassigning(alert); }}>
+                                Reasignar
+                              </button>
+                            )}
                             <button
                               className="link"
                               onClick={(event) => {
@@ -913,6 +920,21 @@ export function AlertRegister() {
         />
       </DataPanel>
       {selected && <AlertDetails alert={selected} onClose={() => setSelected(null)} />}
+      {reassigning && (
+        <CrudModal
+          title={`Reasignar alerta: ${reassigning.product_name || "producto"}`}
+          initial={{ advisor_id: reassigning.assigned_advisor_id || "" }}
+          fields={[
+            { name: "advisor_id", label: "Asesor responsable", required: true, options: [{ value: "", label: "Selecciona un asesor" }, ...advisors.map((advisor) => ({ value: advisor.id, label: advisor.full_name }))] },
+            { name: "reason", label: "Motivo de reasignación", required: true, minLength: 3 },
+          ]}
+          onClose={() => setReassigning(null)}
+          onSave={async (form) => {
+            await api(`/supervision/alerts/${reassigning.id}/reassign`, { method: "POST", body: JSON.stringify({ assigned_advisor_id: form.advisor_id, reason: form.reason }) });
+            await load(1);
+          }}
+        />
+      )}
       {managing && (
         <AlertManagement
           alert={managing}

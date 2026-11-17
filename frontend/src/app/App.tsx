@@ -259,9 +259,9 @@ export function App() {
     ) : activeView === "leads-dashboard" ? (
       supervisor ? <LeadsDashboard /> : <Dashboard user={user} />
     ) : activeView === "lead-recovery" ? (
-      supervisor ? <LeadRecoveryQueue user={user} /> : <Dashboard user={user} />
+      supervisor ? <LeadRecoveryQueue /> : <Dashboard user={user} />
     ) : activeView === "alert-register" ? (
-      <AlertRegister />
+      <AlertRegister user={user} />
     ) : activeView === "recovery" ? (
       supervisor ? (
         <RecoveryQueue />

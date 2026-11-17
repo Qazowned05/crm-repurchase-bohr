@@ -1097,9 +1097,9 @@ export function Leads({ user, leadToManageId, onLeadOpened }: { user: User; lead
               </form>
             </section>
           )}
-          {selected.status === "RECUPERABLE" && user.role !== "ASESOR" && (
+          {selected.status !== "CERRADO_EFECTIVO" && user.role !== "ASESOR" && (
             <form className="alert-management-form" onSubmit={saveAssignment}>
-              <h3>Asignar recuperación</h3>
+              <h3>Reasignar lead</h3>
               <div className="form-grid">
                 <label>
                   Asesor
@@ -1122,7 +1122,7 @@ export function Leads({ user, leadToManageId, onLeadOpened }: { user: User; lead
                 </label>
               </div>
               <footer>
-                <button>Asignar lead</button>
+                <button>Reasignar lead</button>
               </footer>
             </form>
           )}
