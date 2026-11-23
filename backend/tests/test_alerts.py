@@ -1,6 +1,8 @@
 from datetime import date, timedelta
+from io import BytesIO
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
@@ -148,6 +150,33 @@ def test_reassigned_alert_reprograms_for_a_typification_with_next_action(client:
     assert response.status_code == 200
     assert response.json()["status"] == "REPROGRAMADO"
     assert response.json()["customer_id"] == sale["customer_id"]
+
+
+def test_supervisor_reassigns_alerts_from_exported_workbook(client: TestClient, db: Session) -> None:
+    sale, _, supervisor_auth, _ = setup_sale(client, db, date.today() - timedelta(days=30), suffix="excel")
+    replacement = make_user(db, "alert-replacement@example.com", "ASESOR")
+    assert client.get("/api/v1/alerts/inbox", headers=supervisor_auth).status_code == 200
+
+    exported = client.get("/api/v1/alerts/register/assignment.xlsx", headers=supervisor_auth)
+    assert exported.status_code == 200
+    workbook = load_workbook(BytesIO(exported.content))
+    sheet = workbook["Data"]
+    assert [cell.value for cell in sheet[1]] == ["alert_id", "customer", "phone", "product", "alert_date", "status", "current_advisor_email", "responsible_advisor_email"]
+    assert workbook["Asesores"].sheet_state == "hidden"
+    assert sheet.data_validations.dataValidation[0].formula1 == "active_advisor_emails"
+    sheet.cell(2, 8).value = replacement.email
+    payload = BytesIO(); workbook.save(payload)
+
+    imported = client.post(
+        "/api/v1/alerts/register/assignments/import",
+        headers=supervisor_auth,
+        files={"file": ("asignacion_alertas.xlsx", payload.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200
+    assert imported.json() == {"processed": 1, "reassigned": 1}
+    alert = db.query(Alert).filter_by(sale_item_id=sale["items"][0]["id"]).one()
+    assert alert.assigned_advisor_id == replacement.id
+    assert alert.status == "REASIGNADO"
 
 
 def test_confirmed_repurchase_and_annulment_close_active_alerts(client: TestClient, db: Session) -> None:

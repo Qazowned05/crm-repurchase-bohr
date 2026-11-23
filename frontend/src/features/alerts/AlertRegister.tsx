@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal } from "../../components/Modal";
 import { CrudModal } from "../../components/CrudModal";
 import { SearchSelect } from "../../components/SearchSelect";
 import { PAGE_SIZE, Pagination, asPaged } from "../../components/Pagination";
-import { api, listAll } from "../../services/api";
+import { api, download, listAll, upload } from "../../services/api";
 import { DataPanel } from "../../components/DataPanel";
 import { PageHeader } from "../../components/PageHeader";
 import type {
@@ -546,6 +546,8 @@ export function AlertRegister({ user }: { user: User }) {
     advisor_id: "",
   });
   const [error, setError] = useState("");
+  const [assignmentNotice, setAssignmentNotice] = useState("");
+  const assignmentFileRef = useRef<HTMLInputElement>(null);
   const [reassigning, setReassigning] = useState<ManagedAlert | null>(null);
   const load = (page = data.page, active = filters) => {
     const query = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
@@ -553,6 +555,18 @@ export function AlertRegister({ user }: { user: User }) {
     return api<Paged<ManagedAlert> | ManagedAlert[]>(`/alerts/register?${query}`).then((value) =>
       setData(asPaged(value, page)),
     );
+  };
+  const exportAssignments = async () => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => value && query.set(key, value));
+    await download(`/alerts/register/assignment.xlsx?${query}`, "asignacion_alertas.xlsx");
+  };
+  const importAssignments = async (file?: File) => {
+    if (!file) return;
+    const form = new FormData(); form.append("file", file);
+    const result = await upload<{ processed: number; reassigned: number }>("/alerts/register/assignments/import", form);
+    setAssignmentNotice(`${result.reassigned} de ${result.processed} alertas reasignadas.`);
+    await load(1);
   };
   useEffect(() => {
     load().catch(() => setError("No fue posible cargar el registro de alertas."));
@@ -611,7 +625,7 @@ export function AlertRegister({ user }: { user: User }) {
             <h2>Filtros</h2>
             <p>El periodo se aplica sobre la fecha de generación de la alerta.</p>
           </div>
-          <button
+           <button
             className="secondary"
             onClick={() => {
               const reset = {
@@ -634,10 +648,21 @@ export function AlertRegister({ user }: { user: User }) {
                 ),
               );
             }}
-          >
+           >
             Limpiar
-          </button>
-        </div>
+           </button>
+            {user.role !== "ASESOR" && (
+              <>
+                <button type="button" className="secondary" onClick={() => exportAssignments().catch((reason) => setError(reason instanceof Error ? reason.message : "No fue posible descargar las alertas."))}>
+                  Descargar para reasignar
+                </button>
+                <button type="button" className="secondary" onClick={() => assignmentFileRef.current?.click()}>
+                  Subir reasignación Excel
+                </button>
+                <input ref={assignmentFileRef} hidden type="file" accept=".xlsx" onChange={(event) => { void importAssignments(event.target.files?.[0]).catch((reason) => setError(reason instanceof Error ? reason.message : "No fue posible importar la reasignación.")); event.currentTarget.value = ""; }} />
+              </>
+            )}
+          </div>
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -765,6 +790,7 @@ export function AlertRegister({ user }: { user: User }) {
           </div>
         </form>
         {error && <p className="form-error">{error}</p>}
+        {assignmentNotice && <p className="success-message">{assignmentNotice}</p>}
       </section>
       <DataPanel
         className="register-panel"

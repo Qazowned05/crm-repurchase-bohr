@@ -254,6 +254,9 @@ def generate_due_alert_notifications(db: Session) -> int:
 def _run_scheduled_generation() -> None:
     db = SessionLocal()
     try:
+        # Cloud Run can run multiple instances; only one should generate notifications at a time.
+        if db.get_bind().dialect.name == "postgresql" and not db.scalar(select(func.pg_try_advisory_xact_lock(913001))):
+            return
         ensure_daily_alerts(db)
         generate_due_alert_notifications(db)
         db.commit()

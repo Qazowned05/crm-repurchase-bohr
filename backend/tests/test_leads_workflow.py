@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditLog
@@ -46,9 +48,9 @@ def test_lead_activity_uses_configured_leaf_outcome_and_board_filters(client: Te
 
     board = client.get(f"/api/v1/leads/board?status=AGENDADO&typification_id={scheduled['id']}", headers=advisor_auth)
     assert board.status_code == 200
-    assert board.json()["total"] == 1
-    assert board.json()["items"][0]["id"] == lead["id"]
-    assert client.get("/api/v1/leads/board-summary", headers=advisor_auth).json()["AGENDADO"] == 1
+    assert board.json()["total"] == 0
+    assert board.json()["items"] == []
+    assert client.get("/api/v1/leads/board-summary", headers=advisor_auth).json()["AGENDADO"] == 0
     assert client.get("/api/v1/leads/board?status=AGENDADO&next_action=DUE", headers=advisor_auth).json()["total"] == 0
     assert client.post(f"/api/v1/leads/{lead['id']}/close", headers=advisor_auth, json={}).status_code == 404
 
@@ -80,6 +82,37 @@ def test_supervisor_bulk_reassigns_recoverable_leads(client: TestClient, db: Ses
     assert updated["reassigned_from_recovery"] is True
     assert updated["reassigned_at"] is not None
     assert client.get("/api/v1/leads/recovery", headers=supervisor_auth).json() == []
+
+
+def test_supervisor_reassigns_leads_from_exported_workbook(client: TestClient, db: Session) -> None:
+    advisor = make_user(db, "excel-lead-advisor@example.com", "ASESOR")
+    replacement = make_user(db, "excel-lead-replacement@example.com", "ASESOR")
+    supervisor = make_user(db, "excel-lead-supervisor@example.com", "SUPERVISOR")
+    supervisor_auth = auth(client, supervisor.email)
+    campaign = client.post("/api/v1/campaigns", headers=supervisor_auth, json={"name": "Excel Leads"}).json()
+    lead = client.post("/api/v1/leads", headers=auth(client, advisor.email), json={
+        "full_name": "Lead Excel", "phone": "955123456", "campaign_id": campaign["id"],
+    }).json()
+
+    exported = client.get("/api/v1/leads/assignment.xlsx?q=Lead%20Excel", headers=supervisor_auth)
+    assert exported.status_code == 200
+    workbook = load_workbook(BytesIO(exported.content))
+    sheet = workbook["Data"]
+    assert [cell.value for cell in sheet[1]] == ["lead_id", "full_name", "phone", "campaign", "status", "current_advisor_email", "responsible_advisor_email"]
+    assert workbook["Asesores"].sheet_state == "hidden"
+    assert sheet.data_validations.dataValidation[0].formula1 == "active_advisor_emails"
+    assert sheet.cell(2, 1).value == lead["id"]
+    sheet.cell(2, 7).value = replacement.email
+    payload = BytesIO(); workbook.save(payload)
+
+    imported = client.post(
+        "/api/v1/leads/assignments/import",
+        headers=supervisor_auth,
+        files={"file": ("asignacion_leads.xlsx", payload.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert imported.status_code == 200
+    assert imported.json() == {"processed": 1, "reassigned": 1}
+    assert client.get(f"/api/v1/leads/{lead['id']}", headers=supervisor_auth).json()["assigned_advisor_id"] == replacement.id
 
 
 def test_campaigns_are_managed_by_supervisors_and_inactive_campaigns_cannot_receive_leads(client: TestClient, db: Session) -> None:

@@ -1,14 +1,20 @@
 from datetime import date, datetime, timedelta, timezone
+from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
+from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.audit import record_audit
 from app.core.database import get_db
 from app.core.pagination import paginated_scalars, paginate_items
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_roles
 from app.modules.alerts.models import Alert, AlertContactAttempt, AlertNotification
 from app.modules.alerts.schemas import AlertRepurchaseCreate, AlertResponse, ContactAttemptCreate, ContactAttemptResponse, ManagedAlertResponse
 from app.modules.alerts.service import FINAL_STATUSES, active_alerts_query, alert_response, contact_attempt_response, ensure_daily_alerts, managed_alert_response
@@ -20,6 +26,7 @@ from app.modules.products.models import Product
 from app.modules.sales.models import Sale, SaleItem
 from app.modules.sales.routes import recompute_chain, rule_for, sale_response
 from app.modules.sales.schemas import SaleResponse
+from app.modules.supervision.models import AlertAssignmentHistory
 
 router = APIRouter(prefix="/api/v1/alerts", tags=["alerts"])
 
@@ -69,6 +76,54 @@ def apply_priority_filter(query, priority: str | None, today: date):
     if priority == "SIN_GESTION":
         return query.where(Alert.attempts_count == 0)
     return query
+
+
+def register_query(current_user: User, date_from: date | None, date_to: date | None, state: str | None, q: str | None, product_id: str | None, alert_status: str | None, advisor_id: str | None, alert_type: str | None):
+    query = select(Alert).where(Alert.status != "ELIMINADA")
+    if current_user.role == "ASESOR":
+        query = query.where(Alert.assigned_advisor_id == current_user.id)
+    elif advisor_id:
+        query = query.where(Alert.assigned_advisor_id == advisor_id)
+    if date_from:
+        query = query.where(Alert.alert_date >= date_from)
+    if date_to:
+        query = query.where(Alert.alert_date <= date_to)
+    if state == "open-follow-up":
+        query = query.where(Alert.status.not_in(FINAL_STATUSES))
+    elif state == "closed":
+        query = query.where(Alert.status.in_(FINAL_STATUSES))
+    return apply_alert_filters(query, q, product_id, alert_status, alert_type)
+
+
+def excel_text(value: object) -> object:
+    return f"'{value}" if isinstance(value, str) and value.startswith(("=", "+", "-", "@")) else value
+
+
+def record_alert_assignment(alert: Alert, advisor_id: str, actor_id: str, db: Session) -> None:
+    previous = alert.assigned_advisor_id
+    alert.assigned_advisor_id = advisor_id
+    db.add(AlertAssignmentHistory(
+        alert_id=alert.id, previous_advisor_id=previous, assigned_advisor_id=advisor_id,
+        reason="Reasignación masiva mediante Excel", assigned_by_user_id=actor_id,
+    ))
+    record_audit(db, actor_id=actor_id, entity_type="alert", entity_id=alert.id, action="ASSIGNED",
+                 before={"assigned_advisor_id": previous}, after={"assigned_advisor_id": advisor_id, "reason": "Reasignación masiva mediante Excel"})
+    if alert.status not in FINAL_STATUSES:
+        alert.status, alert.closed_at = "REASIGNADO", None
+
+
+def add_advisor_dropdown(workbook: Workbook, sheet, db: Session, column: str) -> None:
+    emails = list(db.scalars(select(User.email).where(User.role == "ASESOR", User.is_active.is_(True)).order_by(User.email)))
+    if not emails:
+        return
+    advisors = workbook.create_sheet("Asesores")
+    for email in emails:
+        advisors.append([email])
+    advisors.sheet_state = "hidden"
+    workbook.defined_names.add(DefinedName("active_advisor_emails", attr_text=f"'Asesores'!$A$1:$A${len(emails)}"))
+    validation = DataValidation(type="list", formula1="active_advisor_emails", allow_blank=False)
+    sheet.add_data_validation(validation)
+    validation.add(f"{column}2:{column}{max(2, sheet.max_row)}")
 
 
 @router.post("/{alert_id}/repurchase", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
@@ -184,7 +239,9 @@ def inbox(
 ) -> list[dict] | dict:
     today = date.today()
     ensure_daily_alerts(db)
-    query = advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()
+    query = (advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()).where(
+        or_(Alert.next_action_date.is_(None), Alert.next_action_date <= today),
+    )
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
         due_date = func.coalesce(Alert.next_action_date, Alert.alert_date)
@@ -211,7 +268,9 @@ def inbox_summary(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
 ) -> dict[str, int]:
     today = date.today()
-    query = advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()
+    query = (advisor_visible_alerts_query(db) if current_user.role == "ASESOR" else active_alerts_query()).where(
+        or_(Alert.next_action_date.is_(None), Alert.next_action_date <= today),
+    )
     if current_user.role == "ASESOR":
         query = query.where(Alert.assigned_advisor_id == current_user.id)
     alerts = list(db.scalars(apply_priority_filter(apply_alert_filters(query, q, product_id, alert_status, alert_type), priority_filter, today)))
@@ -238,24 +297,85 @@ def managed_register(
     """Persistent managed-alert register; unlike inbox, it includes follow-up and closed alerts."""
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="date_from cannot exceed date_to")
-    query = select(Alert).where(Alert.status != "ELIMINADA")
-    if current_user.role == "ASESOR":
-        query = query.where(Alert.assigned_advisor_id == current_user.id)
-    elif advisor_id:
-        query = query.where(Alert.assigned_advisor_id == advisor_id)
-    if date_from:
-        query = query.where(Alert.alert_date >= date_from)
-    if date_to:
-        query = query.where(Alert.alert_date <= date_to)
-    if state == "open-follow-up":
-        query = query.where(Alert.status.not_in(FINAL_STATUSES))
-    elif state == "closed":
-        query = query.where(Alert.status.in_(FINAL_STATUSES))
-    query = apply_alert_filters(query, q, product_id, alert_status, alert_type)
+    query = register_query(current_user, date_from, date_to, state, q, product_id, alert_status, advisor_id, alert_type)
     result = paginated_scalars(db, query.order_by(Alert.alert_date.desc(), Alert.created_at.desc()), page, page_size)
     if isinstance(result, list):
         return [managed_alert_response(alert, db) for alert in result]
     return {**result, "items": [managed_alert_response(alert, db) for alert in result["items"]]}
+
+
+@router.get("/register/assignment.xlsx")
+def export_alert_assignments(
+    date_from: date | None = None, date_to: date | None = None,
+    state: str | None = Query(default=None, pattern="^(open-follow-up|closed)$"),
+    q: str | None = None, product_id: str | None = None, alert_status: str | None = Query(default=None, alias="status"),
+    advisor_id: str | None = None, alert_type: str | None = Query(default=None, pattern="^(AUTOMATICA|REASIGNADA|SEGUIMIENTO)$"),
+    current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
+) -> StreamingResponse:
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from cannot exceed date_to")
+    assigned_advisor = aliased(User)
+    rows = db.execute(
+        register_query(current_user, date_from, date_to, state, q, product_id, alert_status, advisor_id, alert_type)
+        .add_columns(Customer, Product, assigned_advisor)
+        .join(SaleItem, SaleItem.id == Alert.sale_item_id)
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .join(Customer, Customer.id == Sale.customer_id)
+        .join(Product, Product.id == SaleItem.product_id)
+        .outerjoin(assigned_advisor, assigned_advisor.id == Alert.assigned_advisor_id)
+        .order_by(Alert.alert_date.desc(), Alert.created_at.desc())
+    )
+    workbook = Workbook(); sheet = workbook.active; sheet.title = "Data"
+    sheet.append(["alert_id", "customer", "phone", "product", "alert_date", "status", "current_advisor_email", "responsible_advisor_email"])
+    for cell in sheet[1]: cell.font = Font(bold=True)
+    for alert, customer, product, advisor in rows:
+        sheet.append([alert.id, excel_text(f"{customer.first_names} {customer.last_names}".strip()), excel_text(customer.phone), excel_text(product.name), alert.alert_date, alert.status, advisor.email if advisor else "", advisor.email if advisor else ""])
+    add_advisor_dropdown(workbook, sheet, db, "H")
+    sheet.freeze_panes = "A2"; sheet.auto_filter.ref = sheet.dimensions
+    output = BytesIO(); workbook.save(output); output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="asignacion_alertas.xlsx"'})
+
+
+@router.post("/register/assignments/import")
+async def import_alert_assignments(
+    file: UploadFile = File(...), current_user: User = Depends(require_roles("SUPERVISOR", "ADMIN")), db: Session = Depends(get_db),
+) -> dict:
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="Upload an XLSX file")
+    try:
+        workbook = load_workbook(BytesIO(await file.read()), data_only=False, read_only=True)
+        if "Data" not in workbook.sheetnames:
+            raise ValueError("Workbook must contain a Data sheet")
+        sheet = workbook["Data"]
+        headers = [str(cell.value or "").strip() for cell in sheet[1]]
+        if headers != ["alert_id", "customer", "phone", "product", "alert_date", "status", "current_advisor_email", "responsible_advisor_email"]:
+            raise ValueError("Headers must match the downloaded assignment file")
+        rows = []
+        for number, cells in enumerate(sheet.iter_rows(min_row=2), start=2):
+            if all(cell.value is None for cell in cells): continue
+            if any(cell.data_type == "f" for cell in cells): raise ValueError(f"Row {number}: formulas are not allowed")
+            alert_id, advisor_email = str(cells[0].value or "").strip(), str(cells[7].value or "").strip().lower()
+            if not alert_id or not advisor_email: raise ValueError(f"Row {number}: alert_id and responsible_advisor_email are required")
+            rows.append((number, alert_id, advisor_email))
+    except Exception as error:
+        raise HTTPException(status_code=422, detail=f"Invalid assignment file: {error}") from error
+    if not rows:
+        raise HTTPException(status_code=422, detail="The assignment file has no rows")
+    if len({alert_id for _, alert_id, _ in rows}) != len(rows):
+        raise HTTPException(status_code=422, detail="An alert can only appear once in the assignment file")
+    alerts = {alert.id: alert for alert in db.scalars(select(Alert).where(Alert.id.in_({alert_id for _, alert_id, _ in rows})).with_for_update())}
+    advisors = {advisor.email.lower(): advisor for advisor in db.scalars(select(User).where(User.email.in_({email for _, _, email in rows})))}
+    changes = []
+    for number, alert_id, email in rows:
+        alert, advisor = alerts.get(alert_id), advisors.get(email)
+        if alert is None: raise HTTPException(status_code=422, detail=f"Row {number}: alert was not found")
+        if alert.status == "ELIMINADA": raise HTTPException(status_code=422, detail=f"Row {number}: deleted alerts cannot be reassigned")
+        if advisor is None or not advisor.is_active or advisor.role != "ASESOR": raise HTTPException(status_code=422, detail=f"Row {number}: responsible advisor must be active")
+        if alert.assigned_advisor_id != advisor.id: changes.append((alert, advisor))
+    for alert, advisor in changes:
+        record_alert_assignment(alert, advisor.id, current_user.id, db)
+    db.commit()
+    return {"processed": len(rows), "reassigned": len(changes)}
 
 
 @router.get("/upcoming")

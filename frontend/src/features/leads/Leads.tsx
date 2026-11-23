@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CustomerModal } from "../../components/CustomerModal";
 import { DataPanel } from "../../components/DataPanel";
 import { Modal } from "../../components/Modal";
@@ -223,6 +223,8 @@ export function Leads({ user, leadToManageId, onLeadOpened }: { user: User; lead
   const [lines, setLines] = useState<SaleLine[]>([{ product_id: "", quantity: 1 }]);
   const [convertedSale, setConvertedSale] = useState<Sale | null>(null);
   const [error, setError] = useState("");
+  const [assignmentNotice, setAssignmentNotice] = useState("");
+  const assignmentFileRef = useRef<HTMLInputElement>(null);
 
   const queryFor = (status: BoardStatus, page: number, active = filters) => {
     const query = new URLSearchParams({
@@ -269,6 +271,18 @@ export function Leads({ user, leadToManageId, onLeadOpened }: { user: User; lead
     ]);
     const scheduled = pagesLoaded[columns.findIndex(({ key }) => key === "AGENDADO")];
     setSummary({ ...nextSummary, AGENDADO: scheduled.total });
+  };
+  const exportAssignments = async () => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => value && query.set(key, value));
+    await download(`/leads/assignment.xlsx?${query}`, "asignacion_leads.xlsx");
+  };
+  const importAssignments = async (file?: File) => {
+    if (!file) return;
+    const form = new FormData(); form.append("file", file);
+    const result = await upload<{ processed: number; reassigned: number }>("/leads/assignments/import", form);
+    setAssignmentNotice(`${result.reassigned} de ${result.processed} leads reasignados.`);
+    await loadBoard(filters);
   };
 
   useEffect(() => {
@@ -452,9 +466,18 @@ export function Leads({ user, leadToManageId, onLeadOpened }: { user: User; lead
         actions={
           <>
             {user.role !== "ASESOR" && (
-              <button type="button" className="secondary" onClick={() => setImportOpen(true)}>
-                Importar leads
-              </button>
+              <>
+                <button type="button" className="secondary" onClick={() => setImportOpen(true)}>
+                  Importar leads
+                </button>
+                <button type="button" className="secondary" onClick={() => exportAssignments().catch((reason) => setError(reason instanceof Error ? reason.message : "No fue posible descargar los leads."))}>
+                  Descargar para reasignar
+                </button>
+                <button type="button" className="secondary" onClick={() => assignmentFileRef.current?.click()}>
+                  Subir reasignación Excel
+                </button>
+                <input ref={assignmentFileRef} hidden type="file" accept=".xlsx" onChange={(event) => { void importAssignments(event.target.files?.[0]).catch((reason) => setError(reason instanceof Error ? reason.message : "No fue posible importar la reasignación.")); event.currentTarget.value = ""; }} />
+              </>
             )}
             <button
               type="button"
@@ -469,6 +492,7 @@ export function Leads({ user, leadToManageId, onLeadOpened }: { user: User; lead
         }
       />
       {error && <p className="error-message">{error}</p>}
+      {assignmentNotice && <p className="success-message">{assignmentNotice}</p>}
       <DataPanel
         title="Tablero de leads"
         description="Cada columna carga sus propios resultados."

@@ -1,6 +1,8 @@
 from datetime import date, timedelta
+from io import BytesIO
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from app.modules.alerts.models import Alert
@@ -93,6 +95,9 @@ def test_reports_filter_invalid_alerts_and_export_csv(client: TestClient, db: Se
     excel_export = client.get("/api/v1/reports/operation.xlsx", headers=supervisor_auth)
     assert excel_export.status_code == 200
     assert excel_export.content.startswith(b"PK")
+    workbook = load_workbook(BytesIO(excel_export.content), read_only=True)
+    assert "customer_phone" in [cell.value for cell in workbook["Ventas"][1]]
+    assert "customer_phone" in [cell.value for cell in workbook["Alertas"][1]]
     assert client.get("/api/v1/reports/sales", headers=auth(client, "advisor-alertreport@example.com")).status_code == 403
 
 

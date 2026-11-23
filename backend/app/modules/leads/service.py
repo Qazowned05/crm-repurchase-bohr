@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from threading import Event, Thread
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -69,8 +69,11 @@ def _scheduler_loop() -> None:
     while True:
         db = SessionLocal()
         try:
-            generate_due_lead_notifications(db)
-            db.commit()
+            # Cloud Run can run multiple instances; only one should generate notifications at a time.
+            locked = db.get_bind().dialect.name != "postgresql" or db.scalar(select(func.pg_try_advisory_xact_lock(913002)))
+            if locked:
+                generate_due_lead_notifications(db)
+                db.commit()
         except Exception:
             db.rollback()
             logger.exception("Lead notification generation failed")
